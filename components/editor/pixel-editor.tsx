@@ -512,6 +512,7 @@ export function PixelEditor({ initialValues }: { initialValues?: PixelEditorInit
   }, [getImageData]);
 
   const buildGifDataUrl = useCallback(async (): Promise<string> => {
+    // @ts-expect-error gifenc has no type declarations
     const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
     const gif = GIFEncoder();
     for (const frame of frames) {

@@ -396,6 +396,7 @@ export function TextEditor({ mode, initialValues }: TextEditorProps) {
 
   const buildGifDataUrl = useCallback(async (): Promise<string | null> => {
     if (!animationType) return null;
+    // @ts-expect-error gifenc has no type declarations
     const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
     const config     = ANIM_CONFIGS[animationType];
     const gif        = GIFEncoder();

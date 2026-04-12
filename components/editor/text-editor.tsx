@@ -396,8 +396,8 @@ export function TextEditor({ mode, initialValues }: TextEditorProps) {
 
   const buildGifDataUrl = useCallback(async (): Promise<string | null> => {
     if (!animationType) return null;
-    // @ts-expect-error gifenc has no type declarations
-    const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { GIFEncoder, quantize, applyPalette } = await import("gifenc" as any);
     const config     = ANIM_CONFIGS[animationType];
     const gif        = GIFEncoder();
     const renderSize = EXPORT_SIZE * RENDER_SCALE;

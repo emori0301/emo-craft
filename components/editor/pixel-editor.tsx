@@ -170,22 +170,30 @@ function createEmptyGrid(size: number): string[][] {
 // ---- Component ----
 
 const TOOL_DEFS: { tool: ToolType; label: string; icon: React.ReactNode }[] = [
-  { tool: "pencil",   label: "Pencil",    icon: <Pencil   className="h-4 w-4" /> },
-  { tool: "eraser",   label: "Eraser",    icon: <Eraser   className="h-4 w-4" /> },
-  { tool: "line",     label: "Line",      icon: <Minus    className="h-4 w-4" /> },
-  { tool: "rect",     label: "Rectangle", icon: <Square   className="h-4 w-4" /> },
-  { tool: "circle",   label: "Circle",    icon: <Circle   className="h-4 w-4" /> },
-  { tool: "triangle", label: "Triangle",  icon: <Triangle className="h-4 w-4" /> },
+  { tool: "pencil",   label: "ペン",      icon: <Pencil   className="h-4 w-4" /> },
+  { tool: "eraser",   label: "消しゴム",  icon: <Eraser   className="h-4 w-4" /> },
+  { tool: "line",     label: "直線",      icon: <Minus    className="h-4 w-4" /> },
+  { tool: "rect",     label: "四角形",    icon: <Square   className="h-4 w-4" /> },
+  { tool: "circle",   label: "円",        icon: <Circle   className="h-4 w-4" /> },
+  { tool: "triangle", label: "三角形",    icon: <Triangle className="h-4 w-4" /> },
 ];
 
 const SHAPE_TOOLS: ToolType[] = ["line", "rect", "circle", "triangle"];
 
-export function PixelEditor() {
-  const [canvasSize, setCanvasSize] = useState("32");
-  const [frames, setFrames] = useState<string[][][]>(() => [createEmptyGrid(32)]);
+interface PixelEditorInitialValues {
+  pixelData?: string[][];
+  pixelCanvasSize?: number;
+}
+
+export function PixelEditor({ initialValues }: { initialValues?: PixelEditorInitialValues } = {}) {
+  const initSize = initialValues?.pixelCanvasSize ?? 32;
+  const initGrid = initialValues?.pixelData ?? createEmptyGrid(initSize);
+
+  const [canvasSize, setCanvasSize] = useState(String(initSize));
+  const [frames, setFrames] = useState<string[][][]>(() => [initGrid.map((r) => [...r])]);
   const [frameIds, setFrameIds] = useState<string[]>(() => [crypto.randomUUID()]);
   const [currentFrame, setCurrentFrame] = useState(0);
-  const [history, setHistory] = useState<string[][][][]>([[createEmptyGrid(32)]]);
+  const [history, setHistory] = useState<string[][][][]>(() => [[initGrid.map((r) => [...r])]]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [drawColor, setDrawColor] = useState("#000000");
   const [customColor, setCustomColor] = useState("#000000");
@@ -201,6 +209,7 @@ export function PixelEditor() {
   const [saveName, setSaveName] = useState("");
   const [savePublic, setSavePublic] = useState(false);
   const [showSaveForm, setShowSaveForm] = useState(false);
+  const [isSavingGif, setIsSavingGif] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -359,7 +368,6 @@ export function PixelEditor() {
     setPreviewCells([]);
   }, [shapeAnchor, previewCells, activeTool, drawColor, frames, currentFrame, saveToHistory]);
 
-  // handlePointerUp と handlePointerLeave は同じ処理なので共通化
   const handlePointerUpOrLeave = useCallback(() => {
     if (shapeAnchor) {
       commitShape();
@@ -427,7 +435,6 @@ export function PixelEditor() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // サイズ変更時のみ再設定し、それ以外は clearRect で対応
     if (canvas.width !== FIXED_DISPLAY_SIZE || canvas.height !== FIXED_DISPLAY_SIZE) {
       canvas.width = FIXED_DISPLAY_SIZE;
       canvas.height = FIXED_DISPLAY_SIZE;
@@ -452,7 +459,6 @@ export function PixelEditor() {
       ctx.globalAlpha = 1;
     }
 
-    // グリッド線をまとめて 1 回の stroke で描画
     ctx.strokeStyle = "#e5e7eb";
     ctx.lineWidth = 0.5;
     ctx.beginPath();
@@ -505,7 +511,7 @@ export function PixelEditor() {
     link.click();
   }, [getImageData]);
 
-  const downloadGif = useCallback(async () => {
+  const buildGifDataUrl = useCallback(async (): Promise<string> => {
     const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
     const gif = GIFEncoder();
     for (const frame of frames) {
@@ -518,13 +524,21 @@ export function PixelEditor() {
       gif.writeFrame(index, EXPORT_SIZE, EXPORT_SIZE, { palette, delay: frameDelay });
     }
     gif.finish();
-    const url = URL.createObjectURL(new Blob([gif.bytes()], { type: "image/gif" }));
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload  = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(new Blob([gif.bytes()], { type: "image/gif" }));
+    });
+  }, [frames, renderFrameToCanvas, frameDelay]);
+
+  const downloadGif = useCallback(async () => {
+    const dataUrl = await buildGifDataUrl();
     const link = document.createElement("a");
     link.download = `emoji_pixel_${Date.now()}.gif`;
-    link.href = url;
+    link.href = dataUrl;
     link.click();
-    URL.revokeObjectURL(url);
-  }, [frames, renderFrameToCanvas, frameDelay]);
+  }, [buildGifDataUrl]);
 
   const handleDownload = useCallback(() => {
     if (outputFormat === "gif" && frames.length > 1) downloadGif();
@@ -544,9 +558,19 @@ export function PixelEditor() {
     setShowSaveForm(true);
   };
 
-  const handleSaveSubmit = () => {
-    const imageData = getImageData();
-    if (!imageData || !saveName.trim()) return;
+  const handleSaveSubmit = async () => {
+    if (!saveName.trim()) return;
+    let imageData: string;
+    if (outputFormat === "gif" && frames.length > 1) {
+      setIsSavingGif(true);
+      try {
+        imageData = await buildGifDataUrl();
+      } finally {
+        setIsSavingGif(false);
+      }
+    } else {
+      imageData = getImageData();
+    }
     createEmoji.mutate(
       {
         name: saveName.trim(),
@@ -574,13 +598,13 @@ export function PixelEditor() {
       <div className="lg:col-span-1 space-y-4">
         <Card>
           <CardHeader>
-            <CardTitle>Pixel Editor</CardTitle>
+            <CardTitle>ピクセルエディター</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
 
             {/* Canvas size */}
             <div className="space-y-1.5">
-              <Label className={labelStyle}>Canvas Size</Label>
+              <Label className={labelStyle}>キャンバスサイズ</Label>
               <Select value={canvasSize} onValueChange={handleCanvasSizeChange}>
                 <SelectTrigger>
                   <SelectValue />
@@ -595,7 +619,7 @@ export function PixelEditor() {
 
             {/* Tools */}
             <div className="space-y-2">
-              <Label className={labelStyle}>Tools</Label>
+              <Label className={labelStyle}>ツール</Label>
               <div className="flex flex-wrap gap-1">
                 {TOOL_DEFS.map(({ tool, label, icon }) => (
                   <Button
@@ -613,14 +637,14 @@ export function PixelEditor() {
               {isShapeTool && (
                 <div className="flex items-center gap-2 pt-1">
                   <Switch checked={isFilled} onCheckedChange={setIsFilled} id="fill-toggle" />
-                  <Label htmlFor="fill-toggle" className="text-sm cursor-pointer">Fill</Label>
+                  <Label htmlFor="fill-toggle" className="text-sm cursor-pointer">塗りつぶし</Label>
                 </div>
               )}
             </div>
 
             {/* Color */}
             <div className="space-y-2">
-              <Label className={labelStyle}>Color</Label>
+              <Label className={labelStyle}>カラー</Label>
               <div className="flex flex-wrap gap-2">
                 {DEFAULT_COLORS.map((color) => (
                   <button
@@ -678,15 +702,15 @@ export function PixelEditor() {
               >
                 <Redo2 className="h-4 w-4" />
               </Button>
-              <Button variant="outline" size="sm" onClick={clearCanvas}>Clear</Button>
+              <Button variant="outline" size="sm" onClick={clearCanvas}>クリア</Button>
             </div>
 
             {/* Animation frames */}
             <div className="space-y-2 rounded-lg border p-3 bg-muted/30">
               <div className="flex items-center justify-between">
-                <Label className={labelStyle}>Animation</Label>
+                <Label className={labelStyle}>アニメーション</Label>
                 <span className="text-xs text-muted-foreground">
-                  Frame {currentFrame + 1} / {frames.length}
+                  フレーム {currentFrame + 1} / {frames.length}
                 </span>
               </div>
 
@@ -695,13 +719,13 @@ export function PixelEditor() {
                   variant="outline" size="sm" onClick={addFrame}
                   disabled={frames.length >= MAX_FRAMES} className="flex-1 text-xs"
                 >
-                  + Add Frame
+                  + フレーム追加
                 </Button>
                 <Button
                   variant="outline" size="sm" onClick={deleteFrame}
                   disabled={frames.length <= 1} className="flex-1 text-xs"
                 >
-                  − Delete
+                  − 削除
                 </Button>
               </div>
 
@@ -750,12 +774,12 @@ export function PixelEditor() {
                       ? <Pause className="h-4 w-4 mr-1.5" />
                       : <Play  className="h-4 w-4 mr-1.5" />
                     }
-                    {isPlaying ? "Stop Preview" : "Play Preview"}
+                    {isPlaying ? "停止" : "再生プレビュー"}
                   </Button>
 
                   <div className="space-y-1">
                     <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>Speed</span>
+                      <span>速度</span>
                       <span>{frameDelay}ms / frame</span>
                     </div>
                     <input
@@ -771,7 +795,7 @@ export function PixelEditor() {
 
             {/* Download */}
             <div className="space-y-2">
-              <Label className={labelStyle}>Download</Label>
+              <Label className={labelStyle}>ダウンロード</Label>
               {frames.length > 1 && (
                 <div className="flex gap-1.5">
                   {(["png", "gif"] as const).map((fmt) => (
@@ -789,20 +813,20 @@ export function PixelEditor() {
               )}
               <Button onClick={handleDownload} className="w-full" size="lg">
                 <Download className="mr-2 h-4 w-4" />
-                Download {frames.length > 1 ? outputFormat.toUpperCase() : "PNG"}
+                {frames.length > 1 ? outputFormat.toUpperCase() : "PNG"} ダウンロード
               </Button>
             </div>
 
             {/* Save */}
             <Button onClick={handleSave} variant="outline" className="w-full" size="lg">
               <Save className="mr-2 h-4 w-4" />
-              Save to My Emojis
+              マイ絵文字に保存
             </Button>
 
             {showSaveForm && (
               <div className="space-y-3 p-3 rounded-lg border bg-muted/50">
                 <div className="space-y-1.5">
-                  <Label>Name</Label>
+                  <Label>名前</Label>
                   <input
                     type="text"
                     value={saveName}
@@ -813,19 +837,19 @@ export function PixelEditor() {
                   />
                 </div>
                 <div className="flex items-center justify-between">
-                  <Label>Public</Label>
+                  <Label>公開</Label>
                   <Switch checked={savePublic} onCheckedChange={setSavePublic} />
                 </div>
                 <div className="flex gap-2">
                   <Button
                     onClick={handleSaveSubmit}
-                    disabled={!saveName.trim() || createEmoji.isPending}
+                    disabled={!saveName.trim() || createEmoji.isPending || isSavingGif}
                     className="flex-1"
                   >
-                    {createEmoji.isPending ? "Saving..." : "Save"}
+                    {isSavingGif ? "GIF生成中..." : createEmoji.isPending ? "保存中..." : "保存"}
                   </Button>
                   <Button variant="ghost" onClick={() => setShowSaveForm(false)}>
-                    Cancel
+                    キャンセル
                   </Button>
                 </div>
               </div>
@@ -839,10 +863,10 @@ export function PixelEditor() {
         <Card>
           <CardHeader>
             <CardTitle>
-              Preview
+              プレビュー
               {frames.length > 1 && (
                 <span className="ml-2 text-sm font-normal text-muted-foreground">
-                  — Frame {currentFrame + 1} / {frames.length}
+                  — フレーム {currentFrame + 1} / {frames.length}
                   {isPlaying && " ▶"}
                 </span>
               )}
@@ -870,8 +894,8 @@ export function PixelEditor() {
               <p className="text-xs text-muted-foreground">
                 {size}×{size}
                 {frames.length > 1
-                  ? ` · ${frames.length} frames · exported as ${outputFormat.toUpperCase()} (128×128)`
-                  : " (exported as 128×128 for Slack)"}
+                  ? ` · ${frames.length}フレーム · ${outputFormat.toUpperCase()}で書き出し（128×128）`
+                  : "（Slack用に128×128で書き出し）"}
               </p>
             </div>
           </CardContent>

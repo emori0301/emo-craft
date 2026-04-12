@@ -45,9 +45,9 @@ const FONT_WEIGHTS = [
 
 type TextAlign = "left" | "center" | "right";
 const TEXT_ALIGNS: { value: TextAlign; label: string }[] = [
-  { value: "left",   label: "Left" },
-  { value: "center", label: "Center" },
-  { value: "right",  label: "Right" },
+  { value: "left",   label: "左揃え" },
+  { value: "center", label: "中央揃え" },
+  { value: "right",  label: "右揃え" },
 ];
 
 type AnimType =
@@ -189,20 +189,29 @@ const FRAME_CONFIGS: Record<EditorMode, FrameConfig> = {
   },
 };
 
+interface TextEditorInitialValues {
+  text?: string;
+  fontFamily?: string;
+  fontWeight?: string;
+  textColor?: string;
+  backgroundColor?: string;
+}
+
 interface TextEditorProps {
   mode: EditorMode;
+  initialValues?: TextEditorInitialValues;
 }
 
 const RENDER_SCALE = 4;
 const EXPORT_SIZE = 128;
 
-export function TextEditor({ mode }: TextEditorProps) {
-  const [text, setText] = useState("よろ\nしく");
-  const [fontWeight, setFontWeight] = useState("700");
-  const [fontFamily, setFontFamily] = useState("Noto Sans JP");
+export function TextEditor({ mode, initialValues }: TextEditorProps) {
+  const [text, setText] = useState(initialValues?.text ?? "よろ\nしく");
+  const [fontWeight, setFontWeight] = useState(initialValues?.fontWeight ?? "700");
+  const [fontFamily, setFontFamily] = useState(initialValues?.fontFamily ?? "Noto Sans JP");
   const [textAlign, setTextAlign] = useState<TextAlign>("center");
-  const [textColor, setTextColor] = useState("#000000");
-  const [backgroundColor, setBackgroundColor] = useState("");
+  const [textColor, setTextColor] = useState(initialValues?.textColor ?? "#000000");
+  const [backgroundColor, setBackgroundColor] = useState(initialValues?.backgroundColor ?? "");
   const [isComposing, setIsComposing] = useState(false);
   const [outputFormat, setOutputFormat] = useState<"png" | "gif">("png");
   const [animationType, setAnimationType] = useState<AnimType | null>(null);
@@ -214,7 +223,6 @@ export function TextEditor({ mode }: TextEditorProps) {
   const charCount = text.replace(/\n/g, "").length;
   const lineCount = text.split("\n").length;
 
-  // let を排除: reduce で累積カウントを管理
   const trimToLimit = useCallback((val: string): string => {
     const { lines } = val
       .split("\n")
@@ -251,7 +259,6 @@ export function TextEditor({ mode }: TextEditorProps) {
     setTimeout(() => setText(trimToLimit(value)), 0);
   };
 
-  // measureText をキャッシュして呼び出しを半減
   const drawContent = useCallback((
     ctx: CanvasRenderingContext2D,
     SIZE: number,
@@ -358,7 +365,6 @@ export function TextEditor({ mode }: TextEditorProps) {
     return () => clearTimeout(t);
   }, [drawCanvas, fontFamily]);
 
-  // アニメーションプレビューループ
   useEffect(() => {
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
@@ -388,47 +394,57 @@ export function TextEditor({ mode }: TextEditorProps) {
     };
   }, [animationType, drawContent, drawCanvas]);
 
+  const buildGifDataUrl = useCallback(async (): Promise<string | null> => {
+    if (!animationType) return null;
+    const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
+    const config     = ANIM_CONFIGS[animationType];
+    const gif        = GIFEncoder();
+    const renderSize = EXPORT_SIZE * RENDER_SCALE;
+
+    const renderCanvas = document.createElement("canvas");
+    renderCanvas.width = renderCanvas.height = renderSize;
+    const renderCtx = renderCanvas.getContext("2d");
+    if (!renderCtx) return null;
+
+    const exportCanvas = document.createElement("canvas");
+    exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
+    const exportCtx = exportCanvas.getContext("2d");
+    if (!exportCtx) return null;
+    exportCtx.imageSmoothingEnabled = true;
+    exportCtx.imageSmoothingQuality = "high";
+
+    for (let f = 0; f < config.frames; f++) {
+      renderCanvas.width = renderCanvas.height = renderSize;
+      drawContent(renderCtx, renderSize, config.getParams(f, config.frames, renderSize));
+
+      exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
+      exportCtx.drawImage(renderCanvas, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
+
+      const imgData = exportCtx.getImageData(0, 0, EXPORT_SIZE, EXPORT_SIZE);
+      const palette = quantize(imgData.data, 256);
+      const index   = applyPalette(imgData.data, palette);
+      gif.writeFrame(index, EXPORT_SIZE, EXPORT_SIZE, { palette, delay: config.delay });
+    }
+
+    gif.finish();
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload  = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(new Blob([gif.bytes()], { type: "image/gif" }));
+    });
+  }, [animationType, drawContent]);
+
   const downloadGif = async () => {
     if (!animationType) return;
     setIsGeneratingGif(true);
     try {
-      const { GIFEncoder, quantize, applyPalette } = await import("gifenc");
-      const config     = ANIM_CONFIGS[animationType];
-      const gif        = GIFEncoder();
-      const renderSize = EXPORT_SIZE * RENDER_SCALE;
-
-      const renderCanvas = document.createElement("canvas");
-      renderCanvas.width = renderCanvas.height = renderSize;
-      const renderCtx = renderCanvas.getContext("2d");
-      if (!renderCtx) return;
-
-      const exportCanvas = document.createElement("canvas");
-      exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
-      const exportCtx = exportCanvas.getContext("2d");
-      if (!exportCtx) return;
-      exportCtx.imageSmoothingEnabled = true;
-      exportCtx.imageSmoothingQuality = "high";
-
-      for (let f = 0; f < config.frames; f++) {
-        renderCanvas.width = renderCanvas.height = renderSize;
-        drawContent(renderCtx, renderSize, config.getParams(f, config.frames, renderSize));
-
-        exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
-        exportCtx.drawImage(renderCanvas, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
-
-        const imgData = exportCtx.getImageData(0, 0, EXPORT_SIZE, EXPORT_SIZE);
-        const palette = quantize(imgData.data, 256);
-        const index   = applyPalette(imgData.data, palette);
-        gif.writeFrame(index, EXPORT_SIZE, EXPORT_SIZE, { palette, delay: config.delay });
-      }
-
-      gif.finish();
-      const url = URL.createObjectURL(new Blob([gif.bytes()], { type: "image/gif" }));
+      const dataUrl = await buildGifDataUrl();
+      if (!dataUrl) return;
       const a   = document.createElement("a");
-      a.href     = url;
+      a.href     = dataUrl;
       a.download = `emoji_${Date.now()}.gif`;
       a.click();
-      URL.revokeObjectURL(url);
     } finally {
       setIsGeneratingGif(false);
     }
@@ -470,9 +486,20 @@ export function TextEditor({ mode }: TextEditorProps) {
     setShowSaveForm(true);
   };
 
-  const handleSaveSubmit = () => {
-    const imageData = getImageData();
-    if (!imageData || !saveName.trim()) return;
+  const handleSaveSubmit = async () => {
+    if (!saveName.trim()) return;
+    let imageData: string | null;
+    if (outputFormat === "gif" && animationType) {
+      setIsGeneratingGif(true);
+      try {
+        imageData = await buildGifDataUrl();
+      } finally {
+        setIsGeneratingGif(false);
+      }
+    } else {
+      imageData = getImageData();
+    }
+    if (!imageData) return;
     createEmoji.mutate(
       {
         name:            saveName.trim(),
@@ -508,19 +535,19 @@ export function TextEditor({ mode }: TextEditorProps) {
       <div className="lg:col-span-1">
         <Card className={cardStyle}>
           <CardHeader className="pb-3">
-            <CardTitle className="text-lg">Settings</CardTitle>
+            <CardTitle className="text-lg">設定</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
 
             {/* 文字入力 */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <Label className={labelStyle}>Text</Label>
+                <Label className={labelStyle}>テキスト</Label>
                 <span className={cn(
                   "text-xs tabular-nums",
                   charCount >= 10 ? "text-red-400 font-semibold" : hintStyle
                 )}>
-                  {charCount}/10 · {lineCount}/2 lines (max 5/line)
+                  {charCount}/10文字 · {lineCount}/2行 (各行最大5文字)
                 </span>
               </div>
               <textarea
@@ -528,7 +555,7 @@ export function TextEditor({ mode }: TextEditorProps) {
                 onChange={handleTextChange}
                 onCompositionStart={handleCompositionStart}
                 onCompositionEnd={handleCompositionEnd}
-                placeholder="Text"
+                placeholder="テキストを入力"
                 rows={2}
                 className={cn(
                   "w-full resize-none rounded-md border px-3 py-2 text-base leading-relaxed",
@@ -540,7 +567,7 @@ export function TextEditor({ mode }: TextEditorProps) {
             </div>
 
             <div className="space-y-1.5">
-              <Label className={labelStyle}>Weight</Label>
+              <Label className={labelStyle}>太さ</Label>
               <Select value={fontWeight} onValueChange={setFontWeight}>
                 <SelectTrigger className={inputStyle}><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -552,7 +579,7 @@ export function TextEditor({ mode }: TextEditorProps) {
             </div>
 
             <div className="space-y-1.5">
-              <Label className={labelStyle}>Font</Label>
+              <Label className={labelStyle}>フォント</Label>
               <Select value={fontFamily} onValueChange={setFontFamily}>
                 <SelectTrigger className={inputStyle}><SelectValue /></SelectTrigger>
                 <SelectContent className="max-h-[220px]">
@@ -564,7 +591,7 @@ export function TextEditor({ mode }: TextEditorProps) {
             </div>
 
             <div className="space-y-1.5">
-              <Label className={labelStyle}>Alignment</Label>
+              <Label className={labelStyle}>揃え</Label>
               <Select value={textAlign} onValueChange={(v) => setTextAlign(v as TextAlign)}>
                 <SelectTrigger className={inputStyle}><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -576,7 +603,7 @@ export function TextEditor({ mode }: TextEditorProps) {
             </div>
 
             <div className="space-y-1.5">
-              <Label className={labelStyle}>Text color</Label>
+              <Label className={labelStyle}>文字色</Label>
               <div className="flex gap-2 items-center">
                 <input
                   type="color"
@@ -595,7 +622,7 @@ export function TextEditor({ mode }: TextEditorProps) {
             </div>
 
             <div className="space-y-1.5">
-              <Label className={labelStyle}>Background</Label>
+              <Label className={labelStyle}>背景色</Label>
               <div className="flex gap-2 items-center">
                 <input
                   type="color"
@@ -608,7 +635,7 @@ export function TextEditor({ mode }: TextEditorProps) {
                   value={backgroundColor}
                   onChange={(e) => setBackgroundColor(e.target.value)}
                   className={cn("flex-1 rounded-md border px-3 py-2 text-sm", inputStyle)}
-                  placeholder="Transparent"
+                  placeholder="透明"
                 />
                 {backgroundColor && (
                   <Button
@@ -616,7 +643,7 @@ export function TextEditor({ mode }: TextEditorProps) {
                     onClick={() => setBackgroundColor("")}
                     className="flex-shrink-0 text-xs"
                   >
-                    Clear
+                    クリア
                   </Button>
                 )}
               </div>
@@ -624,7 +651,7 @@ export function TextEditor({ mode }: TextEditorProps) {
 
             {/* Format */}
             <div className="space-y-1.5">
-              <Label className={labelStyle}>Format</Label>
+              <Label className={labelStyle}>形式</Label>
               <div className="flex gap-2">
                 {(["png", "gif"] as const).map((fmt) => (
                   <button
@@ -650,13 +677,13 @@ export function TextEditor({ mode }: TextEditorProps) {
             {/* Animation (GIF only) */}
             {outputFormat === "gif" && (
               <div className="space-y-1.5">
-                <Label className={labelStyle}>Animation</Label>
+                <Label className={labelStyle}>アニメーション</Label>
                 <Select
                   value={animationType ?? ""}
                   onValueChange={(v) => setAnimationType(v ? (v as AnimType) : null)}
                 >
                   <SelectTrigger className={inputStyle}>
-                    <SelectValue placeholder="— Select animation —" />
+                    <SelectValue placeholder="— アニメーションを選択 —" />
                   </SelectTrigger>
                   <SelectContent>
                     {(Object.entries(ANIM_CONFIGS) as [AnimType, AnimConfig][]).map(([key, cfg]) => (
@@ -673,7 +700,7 @@ export function TextEditor({ mode }: TextEditorProps) {
             {outputFormat === "png" ? (
               <Button onClick={downloadImage} className="w-full" size="lg">
                 <Download className="mr-2 h-4 w-4" />
-                Download PNG
+                PNG ダウンロード
               </Button>
             ) : (
               <Button
@@ -683,19 +710,19 @@ export function TextEditor({ mode }: TextEditorProps) {
                 disabled={!animationType || isGeneratingGif}
               >
                 <Download className="mr-2 h-4 w-4" />
-                {isGeneratingGif ? "Generating..." : animationType ? "Download GIF" : "Select Animation"}
+                {isGeneratingGif ? "生成中..." : animationType ? "GIF ダウンロード" : "アニメーションを選択"}
               </Button>
             )}
 
             <Button onClick={handleSave} variant="outline" className="w-full" size="lg">
               <Save className="mr-2 h-4 w-4" />
-              Save to My Emojis
+              マイ絵文字に保存
             </Button>
 
             {showSaveForm && (
               <div className="space-y-3 p-3 rounded-lg border bg-muted/50">
                 <div className="space-y-1.5">
-                  <Label className={labelStyle}>Name</Label>
+                  <Label className={labelStyle}>名前</Label>
                   <input
                     type="text"
                     value={saveName}
@@ -706,7 +733,7 @@ export function TextEditor({ mode }: TextEditorProps) {
                   />
                 </div>
                 <div className="flex items-center justify-between">
-                  <Label className={labelStyle}>Public</Label>
+                  <Label className={labelStyle}>公開</Label>
                   <Switch checked={savePublic} onCheckedChange={setSavePublic} />
                 </div>
                 <div className="flex gap-2">
@@ -715,9 +742,9 @@ export function TextEditor({ mode }: TextEditorProps) {
                     disabled={!saveName.trim() || createEmoji.isPending}
                     className="flex-1"
                   >
-                    {createEmoji.isPending ? "Saving..." : "Save"}
+                    {createEmoji.isPending ? "保存中..." : "保存"}
                   </Button>
-                  <Button variant="ghost" onClick={() => setShowSaveForm(false)}>Cancel</Button>
+                  <Button variant="ghost" onClick={() => setShowSaveForm(false)}>キャンセル</Button>
                 </div>
               </div>
             )}
@@ -729,7 +756,7 @@ export function TextEditor({ mode }: TextEditorProps) {
       <div className="lg:col-span-2">
         <Card className={cardStyle}>
           <CardHeader className="pb-3">
-            <CardTitle className="text-lg">Preview</CardTitle>
+            <CardTitle className="text-lg">プレビュー</CardTitle>
           </CardHeader>
           <CardContent>
             <div className={cn(
@@ -746,7 +773,7 @@ export function TextEditor({ mode }: TextEditorProps) {
                 )}
               </div>
               {frameConfig.decoration}
-              <p className={cn("text-xs", hintStyle)}>128×128px (Slack standard)</p>
+              <p className={cn("text-xs", hintStyle)}>128×128px（Slack標準サイズ）</p>
             </div>
           </CardContent>
         </Card>

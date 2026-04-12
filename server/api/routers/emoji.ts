@@ -67,6 +67,16 @@ export const emojiRouter = router({
       });
     }),
 
+  getById: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const emoji = await prisma.emoji.findFirst({
+        where: { id: input.id, userId: ctx.userId },
+      });
+      if (!emoji) throw new TRPCError({ code: "NOT_FOUND" });
+      return emoji;
+    }),
+
   delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {

@@ -13,13 +13,14 @@ export default function Home() {
     <div className="container py-8 px-4">
       <section className="flex flex-col items-center justify-center space-y-6 py-16 sm:py-24">
         <div className="space-y-4 text-center max-w-2xl">
-          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
-            <span className="bg-gradient-to-r from-purple-600 via-pink-600 to-orange-500 bg-clip-text text-transparent">
-              emoCraft
-            </span>
+          <h1
+            className="text-5xl sm:text-6xl md:text-7xl font-bold text-foreground"
+            style={{ fontFamily: "'M PLUS Rounded 1c', sans-serif" }}
+          >
+            emoCraft
           </h1>
-          <p className="mx-auto text-base text-muted-foreground sm:text-lg md:text-xl">
-            テキストやピクセルアートでカスタム絵文字を作成
+          <p className="mx-auto text-base text-muted-foreground sm:text-lg">
+            テキストやピクセルアートでSlack絵文字を作ろう
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-4">

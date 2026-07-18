@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	createEmptyGrid,
+	floodFill,
 	plotCircle,
 	plotLine,
 	plotRect,
@@ -109,6 +110,41 @@ describe("plotTriangle", () => {
 	it("degenerate (single-row) triangle spans the base", () => {
 		const cells = plotTriangle(2, 0, 2, 4, true);
 		for (let c = 0; c <= 4; c++) expect(has(cells, 2, c)).toBe(true);
+	});
+});
+
+describe("floodFill", () => {
+	it("fills the whole empty grid from any cell", () => {
+		const grid = createEmptyGrid(4);
+		expect(floodFill(grid, 1, 1, "#000000")).toHaveLength(16);
+	});
+
+	it("respects boundaries of other colors", () => {
+		const grid = createEmptyGrid(4);
+		// 縦の壁で左右を分断
+		for (let r = 0; r < 4; r++) grid[r][2] = "#000000";
+		const cells = floodFill(grid, 0, 0, "#ff0000");
+		expect(cells).toHaveLength(8); // 左側 4×2 のみ
+		expect(cells.some(([, c]) => c > 1)).toBe(false);
+	});
+
+	it("returns empty when target already has the color", () => {
+		const grid = createEmptyGrid(4);
+		expect(floodFill(grid, 0, 0, "#ffffff")).toHaveLength(0);
+	});
+
+	it("returns empty for out-of-bounds start", () => {
+		const grid = createEmptyGrid(4);
+		expect(floodFill(grid, -1, 0, "#000000")).toHaveLength(0);
+		expect(floodFill(grid, 0, 4, "#000000")).toHaveLength(0);
+	});
+
+	it("does not fill diagonally", () => {
+		const grid = createEmptyGrid(3);
+		// 対角の壁: (0,1),(1,0) を黒にすると (0,0) は孤立
+		grid[0][1] = "#000000";
+		grid[1][0] = "#000000";
+		expect(floodFill(grid, 0, 0, "#ff0000")).toHaveLength(1);
 	});
 });
 

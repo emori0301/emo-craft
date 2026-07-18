@@ -29,10 +29,18 @@ function Kbd({ children }: { children: React.ReactNode }) {
  * キーボードショートカット一覧ダイアログ。
  * ツールバーのボタン、または「?」キーで開く。
  */
-export function ShortcutHelp({ shortcuts }: { shortcuts: ShortcutItem[] }) {
+export function ShortcutHelp({
+	shortcuts,
+	enabled = true,
+}: {
+	shortcuts: ShortcutItem[];
+	/** false のとき「?」キーでの起動を無効化（非表示タブ用） */
+	enabled?: boolean;
+}) {
 	const [open, setOpen] = useState(false);
 
 	useEffect(() => {
+		if (!enabled) return;
 		const onKeyDown = (e: KeyboardEvent) => {
 			const target = e.target as HTMLElement | null;
 			if (
@@ -49,7 +57,7 @@ export function ShortcutHelp({ shortcuts }: { shortcuts: ShortcutItem[] }) {
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, []);
+	}, [enabled]);
 
 	return (
 		<>

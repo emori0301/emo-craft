@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+	<!-- ヘッダーのロゴマークと同じ 4色ピクセルグリッド -->
+	<g transform="rotate(3 16 16)">
+		<clipPath id="rounded">
+			<rect x="2" y="2" width="28" height="28" rx="7" />
+		</clipPath>
+		<g clip-path="url(#rounded)">
+			<rect x="2" y="2" width="14" height="14" fill="#8b5cf6" />
+			<rect x="16" y="2" width="14" height="14" fill="#f472b6" />
+			<rect x="2" y="16" width="14" height="14" fill="#fbbf24" />
+			<rect x="16" y="16" width="14" height="14" fill="#34d399" />
+		</g>
+	</g>
+</svg>

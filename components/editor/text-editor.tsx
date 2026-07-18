@@ -34,7 +34,11 @@ import {
 	AP0,
 	FONT_WEIGHTS,
 	FONTS,
+	type GradientDirection,
+	parseTextColor,
+	serializeTextColor,
 	TEXT_ALIGNS,
+	TEXT_LIMITS,
 	type TextAlign,
 	trimToLimit,
 } from "@/lib/editor/text-config";
@@ -50,6 +54,8 @@ interface TextEditorInitialValues {
 
 interface TextEditorProps {
 	initialValues?: TextEditorInitialValues;
+	/** タブが表示中かどうか（非表示中はショートカットを無効化） */
+	active?: boolean;
 }
 
 const RENDER_SCALE = 4;
@@ -167,7 +173,12 @@ function ColorPicker({
 	);
 }
 
-export function TextEditor({ initialValues }: TextEditorProps = {}) {
+export function TextEditor({
+	initialValues,
+	active = true,
+}: TextEditorProps = {}) {
+	const initColor = parseTextColor(initialValues?.textColor);
+
 	const [text, setText] = useState(initialValues?.text ?? "よろ\nしく");
 	const [fontWeight, setFontWeight] = useState(
 		initialValues?.fontWeight ?? "700",
@@ -177,10 +188,34 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 	);
 	const [textAlign, setTextAlign] = useState<TextAlign>("center");
 	const [textColor, setTextColor] = useState(
-		initialValues?.textColor ?? "#000000",
+		initColor.type === "solid" ? initColor.color : "#000000",
+	);
+	const [colorMode, setColorMode] = useState<"solid" | "gradient">(
+		initColor.type,
+	);
+	const [gradientFrom, setGradientFrom] = useState(
+		initColor.type === "gradient" ? initColor.from : "#ef4444",
+	);
+	const [gradientTo, setGradientTo] = useState(
+		initColor.type === "gradient" ? initColor.to : "#3b82f6",
+	);
+	const [gradientDirection, setGradientDirection] = useState<GradientDirection>(
+		initColor.type === "gradient" ? initColor.direction : "vertical",
 	);
 	const [backgroundColor, setBackgroundColor] = useState(
 		initialValues?.backgroundColor ?? "",
+	);
+
+	/** 現在の文字色設定（保存・下書き用のシリアライズ値） */
+	const serializedTextColor = serializeTextColor(
+		colorMode === "gradient"
+			? {
+					type: "gradient",
+					direction: gradientDirection,
+					from: gradientFrom,
+					to: gradientTo,
+				}
+			: { type: "solid", color: textColor },
 	);
 	const [isComposing, setIsComposing] = useState(false);
 	const [animationType, setAnimationType] = useState<AnimType | null>(null);
@@ -229,8 +264,8 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 
 			const lines = trimmed
 				.split("\n")
-				.slice(0, 2)
-				.map((l) => l.slice(0, 5))
+				.slice(0, TEXT_LIMITS.maxLines)
+				.map((l) => l.slice(0, TEXT_LIMITS.maxCharsPerLine))
 				.filter((l) => l.length > 0);
 			if (lines.length === 0) return;
 
@@ -240,12 +275,6 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 			const SAFETY = 0.9;
 
 			ctx.save();
-
-			if (animParams.clipReveal < 1) {
-				ctx.beginPath();
-				ctx.rect(0, 0, SIZE * animParams.clipReveal, SIZE);
-				ctx.clip();
-			}
 
 			if (animParams.scale !== 1 || animParams.rotate !== 0) {
 				ctx.translate(SIZE / 2, SIZE / 2);
@@ -265,7 +294,9 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 				ctx.filter = `hue-rotate(${animParams.hueShift}deg)`;
 			if (animParams.shadowBlur > 0) {
 				ctx.shadowBlur = animParams.shadowBlur;
-				ctx.shadowColor = animParams.shadowColor || textColor;
+				ctx.shadowColor =
+					animParams.shadowColor ||
+					(colorMode === "gradient" ? gradientFrom : textColor);
 			}
 
 			ctx.font = `${fontWeight} 100px "${fontFamily}", sans-serif`;
@@ -279,6 +310,14 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 			const slotH = CONTENT_H / numLines;
 
 			for (const [i, line] of lines.entries()) {
+				// タイプライター: 全体の進捗 (clipReveal) を行数で分割し、
+				// 1行目 → 2行目 の順に左から表示する
+				const lineProgress =
+					animParams.clipReveal >= 1
+						? 1
+						: Math.max(0, Math.min(1, animParams.clipReveal * numLines - i));
+				if (lineProgress <= 0) continue;
+
 				const m = allMetrics[i];
 				const natW = m.width || 1;
 				const asc = m.actualBoundingBoxAscent ?? 90;
@@ -297,16 +336,51 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 							: PADDING + CONTENT_W / 2;
 
 				ctx.save();
+				if (lineProgress < 1) {
+					ctx.beginPath();
+					ctx.rect(0, 0, SIZE * lineProgress, SIZE);
+					ctx.clip();
+				}
 				ctx.translate(drawX, drawY);
 				ctx.scale(scaleX, scaleY);
 				ctx.textAlign = textAlign;
+
+				if (colorMode === "gradient") {
+					// キャンバス全体で連続するグラデーションになるよう、
+					// 行ごとの transform (translate + scale) を逆算した座標で作る
+					let gradient: CanvasGradient;
+					if (gradientDirection === "vertical") {
+						const y0 = (PADDING - drawY) / scaleY;
+						const y1 = (PADDING + CONTENT_H - drawY) / scaleY;
+						gradient = ctx.createLinearGradient(0, y0, 0, y1);
+					} else {
+						const x0 = (PADDING - drawX) / scaleX;
+						const x1 = (PADDING + CONTENT_W - drawX) / scaleX;
+						gradient = ctx.createLinearGradient(x0, 0, x1, 0);
+					}
+					gradient.addColorStop(0, gradientFrom);
+					gradient.addColorStop(1, gradientTo);
+					ctx.fillStyle = gradient;
+				}
+
 				ctx.fillText(line, 0, 0);
 				ctx.restore();
 			}
 
 			ctx.restore();
 		},
-		[text, fontWeight, fontFamily, textAlign, textColor, backgroundColor],
+		[
+			text,
+			fontWeight,
+			fontFamily,
+			textAlign,
+			textColor,
+			backgroundColor,
+			colorMode,
+			gradientFrom,
+			gradientTo,
+			gradientDirection,
+		],
 	);
 
 	// アニメーションループが最新の描画関数を参照するための ref
@@ -483,11 +557,24 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 			text,
 			fontWeight,
 			fontFamily,
-			textColor,
+			textColor: serializedTextColor,
 			backgroundColor,
 			savedAt: Date.now(),
 		}),
 	});
+
+	/** シリアライズ済みの文字色を各 state に展開する */
+	const applyColorValue = (raw: string) => {
+		const parsed = parseTextColor(raw);
+		setColorMode(parsed.type);
+		if (parsed.type === "solid") {
+			setTextColor(parsed.color);
+		} else {
+			setGradientFrom(parsed.from);
+			setGradientTo(parsed.to);
+			setGradientDirection(parsed.direction);
+		}
+	};
 
 	// ログイン往復後の下書き復元（編集モードでは提案しない）
 	const [availableDraft, setAvailableDraft] = useState<TextEditorDraft | null>(
@@ -504,7 +591,7 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 		setText(availableDraft.text);
 		setFontWeight(availableDraft.fontWeight);
 		setFontFamily(availableDraft.fontFamily);
-		setTextColor(availableDraft.textColor);
+		applyColorValue(availableDraft.textColor);
 		setBackgroundColor(availableDraft.backgroundColor);
 		clearDraft();
 		setAvailableDraft(null);
@@ -520,11 +607,17 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 	const shortcutActionsRef = useRef({
 		save: () => {},
 		download: () => {},
+		active: true,
 	});
-	shortcutActionsRef.current = { save: openSaveForm, download: handleDownload };
+	shortcutActionsRef.current = {
+		save: openSaveForm,
+		download: handleDownload,
+		active,
+	};
 
 	useEffect(() => {
 		const onKeyDown = (e: KeyboardEvent) => {
+			if (!shortcutActionsRef.current.active) return;
 			if (!(e.metaKey || e.ctrlKey)) return;
 			if (e.key.toLowerCase() === "s") {
 				e.preventDefault();
@@ -557,7 +650,7 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 			text,
 			fontWeight: Number.parseInt(fontWeight, 10),
 			fontFamily,
-			textColor,
+			textColor: serializedTextColor,
 			backgroundColor: backgroundColor || undefined,
 		});
 	};
@@ -627,12 +720,13 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 							<span
 								className={cn(
 									"text-xs tabular-nums",
-									charCount >= 10
+									charCount >= TEXT_LIMITS.maxTotalChars
 										? "text-red-400 font-semibold"
 										: "text-muted-foreground",
 								)}
 							>
-								{charCount}/10文字 · {lineCount}/2行
+								{charCount}/{TEXT_LIMITS.maxTotalChars}文字 · {lineCount}/
+								{TEXT_LIMITS.maxLines}行
 							</span>
 						</div>
 						<textarea
@@ -640,8 +734,8 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 							onChange={handleTextChange}
 							onCompositionStart={handleCompositionStart}
 							onCompositionEnd={handleCompositionEnd}
-							placeholder={"テキストを入力\n（2行・各行5文字まで）"}
-							rows={2}
+							placeholder={"テキストを入力\n（3行・各行6文字まで）"}
+							rows={3}
 							aria-label="絵文字のテキスト"
 							className={cn(
 								"w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-lg leading-relaxed",
@@ -731,12 +825,104 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 					<section className="space-y-3">
 						<SectionLabel>カラー</SectionLabel>
 						<div className="space-y-1.5">
-							<Label className="text-xs text-muted-foreground">文字色</Label>
-							<ColorPicker
-								value={textColor}
-								onChange={setTextColor}
-								label="文字色"
-							/>
+							<div className="flex items-center gap-3">
+								<Label className="text-xs text-muted-foreground">文字色</Label>
+								<div className="flex rounded-lg border p-0.5">
+									{(
+										[
+											["solid", "単色"],
+											["gradient", "グラデーション"],
+										] as const
+									).map(([mode, label]) => (
+										<button
+											key={mode}
+											type="button"
+											onClick={() => setColorMode(mode)}
+											aria-pressed={colorMode === mode}
+											className={cn(
+												"rounded-md px-3 py-1 text-xs font-medium transition",
+												colorMode === mode
+													? "bg-primary text-primary-foreground"
+													: "text-muted-foreground hover:text-foreground",
+											)}
+										>
+											{label}
+										</button>
+									))}
+								</div>
+							</div>
+							{colorMode === "solid" ? (
+								<ColorPicker
+									value={textColor}
+									onChange={setTextColor}
+									label="文字色"
+								/>
+							) : (
+								<div className="space-y-2.5 rounded-lg border p-3">
+									<div className="flex items-center gap-3">
+										<Label className="text-xs text-muted-foreground">
+											向き
+										</Label>
+										<div className="flex rounded-lg border p-0.5">
+											{(
+												[
+													["vertical", "上 → 下"],
+													["horizontal", "左 → 右"],
+												] as const
+											).map(([dir, label]) => (
+												<button
+													key={dir}
+													type="button"
+													onClick={() => setGradientDirection(dir)}
+													aria-pressed={gradientDirection === dir}
+													className={cn(
+														"rounded-md px-3 py-1 text-xs font-medium transition",
+														gradientDirection === dir
+															? "bg-primary text-primary-foreground"
+															: "text-muted-foreground hover:text-foreground",
+													)}
+												>
+													{label}
+												</button>
+											))}
+										</div>
+										{/* グラデーションのプレビュー */}
+										<span
+											aria-hidden="true"
+											className="ml-auto h-7 w-14 rounded-md border"
+											style={{
+												background: `linear-gradient(${
+													gradientDirection === "vertical"
+														? "to bottom"
+														: "to right"
+												}, ${gradientFrom}, ${gradientTo})`,
+											}}
+										/>
+									</div>
+									<div className="space-y-1">
+										<Label className="text-xs text-muted-foreground">
+											開始色
+											{gradientDirection === "vertical" ? "（上）" : "（左）"}
+										</Label>
+										<ColorPicker
+											value={gradientFrom}
+											onChange={setGradientFrom}
+											label="開始色"
+										/>
+									</div>
+									<div className="space-y-1">
+										<Label className="text-xs text-muted-foreground">
+											終了色
+											{gradientDirection === "vertical" ? "（下）" : "（右）"}
+										</Label>
+										<ColorPicker
+											value={gradientTo}
+											onChange={setGradientTo}
+											label="終了色"
+										/>
+									</div>
+								</div>
+							)}
 						</div>
 						<div className="space-y-1.5">
 							<Label className="text-xs text-muted-foreground">
@@ -802,10 +988,10 @@ export function TextEditor({ initialValues }: TextEditorProps = {}) {
 			</div>
 
 			{/* ==== 操作バー（常時表示） ==== */}
-			<div className="sticky bottom-0 z-40 mt-6 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+			<div className="sticky bottom-0 z-40 mt-6 -mx-4 border-t bg-card/95 px-4 py-3 shadow-[0_-1px_3px_rgba(0,0,0,0.04)] backdrop-blur supports-[backdrop-filter]:bg-card/85">
 				<div className="flex items-center justify-end gap-2">
 					<div className="mr-auto flex items-center gap-1.5">
-						<ShortcutHelp shortcuts={TEXT_SHORTCUTS} />
+						<ShortcutHelp shortcuts={TEXT_SHORTCUTS} enabled={active} />
 						<span className="text-xs text-muted-foreground hidden sm:block">
 							{outputFormat === "gif"
 								? `GIF · ${animationType ? ANIM_CONFIGS[animationType].label : ""}`

@@ -81,14 +81,29 @@ function EditorContent() {
 							<TabsTrigger value="text">テキスト</TabsTrigger>
 							<TabsTrigger value="pixel">ピクセル</TabsTrigger>
 						</TabsList>
-						<TabsContent value="text">
+						{/* forceMount + hidden で両エディタをマウントしたままにし、
+						    タブを行き来しても編集中の内容が消えないようにする */}
+						<TabsContent
+							value="text"
+							forceMount
+							className="data-[state=inactive]:hidden"
+						>
 							<TextEditor
 								key={editId ?? presetId ?? "new"}
 								initialValues={textInitial}
+								active={activeTab === "text"}
 							/>
 						</TabsContent>
-						<TabsContent value="pixel">
-							<PixelEditor key={editId ?? "new"} initialValues={pixelInitial} />
+						<TabsContent
+							value="pixel"
+							forceMount
+							className="data-[state=inactive]:hidden"
+						>
+							<PixelEditor
+								key={editId ?? "new"}
+								initialValues={pixelInitial}
+								active={activeTab === "pixel"}
+							/>
 						</TabsContent>
 					</Tabs>
 				)}

@@ -93,29 +93,73 @@ export const ANIM_CONFIGS: Record<AnimType, AnimConfig> = {
 	zoomOut:    { label: "ズームアウト",   frames: 10, delay: 80,  getParams: (f,t)   => ({ ...AP0, scale: 1 - 0.95*(f/(t-1)) }) },
 	pulse:      { label: "ドキドキ",      frames: 14, delay: 70,  getParams: (f,t)   => ({ ...AP0, scale: 0.8 + 0.25*Math.abs(Math.sin(f/t*Math.PI*2)) }) },
 	bounce:     { label: "バウンド",      frames: 14, delay: 70,  getParams: (f,t,s) => ({ ...AP0, offsetY: Math.round(-Math.abs(Math.sin(f/t*Math.PI*2))*s*0.14) }) },
-	shake:      { label: "ゆれる",        frames: 10, delay: 55,  getParams: (f,_,s) => ({ ...AP0, offsetX: Math.round(Math.sin(f*3.14)*s*0.05) }) },
+	shake:      { label: "ゆれる",        frames: 12, delay: 55,  getParams: (f,t,s) => ({ ...AP0, offsetX: Math.round(Math.sin((f/t)*Math.PI*6)*s*0.05) }) },
 	spin:       { label: "回転",          frames: 12, delay: 70,  getParams: (f,t)   => ({ ...AP0, rotate: 360*f/t, scale: 0.65 }) },
 	rainbow:    { label: "虹色",          frames: 16, delay: 60,  getParams: (f,t)   => ({ ...AP0, hueShift: 360*f/t }) },
 	neon:       { label: "ネオン",        frames: 14, delay: 75,  getParams: (f,t,s) => ({ ...AP0, shadowBlur: s*0.10*Math.abs(Math.sin(f/t*Math.PI*2)), shadowColor: "#ffffff" }) },
 	glitch:     { label: "グリッチ",      frames: 8,  delay: 60,  getParams: (f,_,s) => ({ ...AP0, offsetX: Math.round(Math.sin(f*2.3)*s*0.025), hueShift: (f*87)%360 }) },
-	typewriter: { label: "タイプ表示",     frames: 14, delay: 80,  getParams: (f,t)   => ({ ...AP0, clipReveal: f/(t-1) }) },
+	typewriter: { label: "タイプライター", frames: 14, delay: 80,  getParams: (f,t)   => ({ ...AP0, clipReveal: f/(t-1) }) },
 };
 
+// ---- 文字色（単色 / グラデーション） ----
+
+export type GradientDirection = "vertical" | "horizontal";
+
+export type TextColorValue =
+	| { type: "solid"; color: string }
+	| {
+			type: "gradient";
+			direction: GradientDirection;
+			from: string;
+			to: string;
+	  };
+
 /**
- * テキストを行数・文字数制限（2行 / 各行5文字 / 計10文字）に収める
+ * 文字色を DB の textColor 列（文字列）に載せるためにシリアライズする。
+ * 単色: "#rrggbb" / グラデーション: "gradient:<direction>:<from>:<to>"
+ */
+export function serializeTextColor(value: TextColorValue): string {
+	if (value.type === "solid") return value.color;
+	return `gradient:${value.direction}:${value.from}:${value.to}`;
+}
+
+export function parseTextColor(raw: string | null | undefined): TextColorValue {
+	if (raw?.startsWith("gradient:")) {
+		const [, direction, from, to] = raw.split(":");
+		if (
+			(direction === "vertical" || direction === "horizontal") &&
+			from &&
+			to
+		) {
+			return { type: "gradient", direction, from, to };
+		}
+	}
+	return { type: "solid", color: raw || "#000000" };
+}
+
+/** テキストの行数・文字数制限 */
+export const TEXT_LIMITS = {
+	maxLines: 3,
+	maxCharsPerLine: 6,
+	maxTotalChars: 18,
+} as const;
+
+/**
+ * テキストを行数・文字数制限（3行 / 各行6文字 / 計18文字）に収める。
+ * 空行は保持する（行末で Enter を押した直後の空行を消すと改行できなくなるため）。
  */
 export function trimToLimit(val: string): string {
 	const { lines } = val
 		.split("\n")
-		.slice(0, 2)
+		.slice(0, TEXT_LIMITS.maxLines)
 		.reduce<{ lines: string[]; total: number }>(
 			({ lines, total }, l) => {
-				const remaining = 10 - total;
-				if (remaining <= 0) return { lines, total };
-				const capped = l.slice(0, Math.min(5, remaining));
-				return capped
-					? { lines: [...lines, capped], total: total + capped.length }
-					: { lines, total };
+				const remaining = Math.max(0, TEXT_LIMITS.maxTotalChars - total);
+				const capped = l.slice(
+					0,
+					Math.min(TEXT_LIMITS.maxCharsPerLine, remaining),
+				);
+				return { lines: [...lines, capped], total: total + capped.length };
 			},
 			{ lines: [], total: 0 },
 		);

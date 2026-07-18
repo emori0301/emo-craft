@@ -4,9 +4,12 @@ import {
 	Circle,
 	Download,
 	Eraser,
+	Grid3X3,
 	Minus,
+	PaintBucket,
 	Pause,
 	Pencil,
+	Pipette,
 	Play,
 	Plus,
 	Redo2,
@@ -15,6 +18,8 @@ import {
 	Trash2,
 	Triangle,
 	Undo2,
+	ZoomIn,
+	ZoomOut,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -63,6 +68,7 @@ import { encodeGifToDataUrl, type GifFrame } from "@/lib/editor/gif";
 import {
 	type Cell,
 	createEmptyGrid,
+	floodFill,
 	plotCircle,
 	plotLine,
 	plotRect,
@@ -72,6 +78,12 @@ import { cn } from "@/lib/utils";
 
 const FIXED_DISPLAY_SIZE = 512;
 const MAX_FRAMES = 8;
+
+/** キャンバスの表示基準サイズ（ズーム 100% 時） */
+const BASE_DISPLAY_SIZE = 384;
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2.5;
+const ZOOM_STEP = 0.25;
 
 const DEFAULT_COLORS = [
 	"#000000",
@@ -86,7 +98,15 @@ const DEFAULT_COLORS = [
 	"#78716c",
 ];
 
-type ToolType = "pencil" | "eraser" | "line" | "rect" | "circle" | "triangle";
+type ToolType =
+	| "pencil"
+	| "eraser"
+	| "bucket"
+	| "eyedropper"
+	| "line"
+	| "rect"
+	| "circle"
+	| "triangle";
 
 const TOOL_DEFS: {
 	tool: ToolType;
@@ -105,6 +125,18 @@ const TOOL_DEFS: {
 		label: "消しゴム",
 		shortcut: "E",
 		icon: <Eraser className="h-4 w-4" />,
+	},
+	{
+		tool: "bucket",
+		label: "塗りつぶし",
+		shortcut: "F",
+		icon: <PaintBucket className="h-4 w-4" />,
+	},
+	{
+		tool: "eyedropper",
+		label: "スポイト",
+		shortcut: "I",
+		icon: <Pipette className="h-4 w-4" />,
 	},
 	{
 		tool: "line",
@@ -137,10 +169,15 @@ const SHAPE_TOOLS: ToolType[] = ["line", "rect", "circle", "triangle"];
 const PIXEL_SHORTCUTS: ShortcutItem[] = [
 	{ keys: ["P"], description: "ペン" },
 	{ keys: ["E"], description: "消しゴム" },
+	{ keys: ["F"], description: "塗りつぶし" },
+	{ keys: ["I"], description: "スポイト" },
 	{ keys: ["L"], description: "直線" },
 	{ keys: ["R"], description: "四角形" },
 	{ keys: ["C"], description: "円" },
 	{ keys: ["T"], description: "三角形" },
+	{ keys: ["Alt", "クリック"], description: "その場でスポイト（色を拾う）" },
+	{ keys: ["G"], description: "グリッド線の表示 / 非表示" },
+	{ keys: ["+", "−"], description: "ズームイン / ズームアウト" },
 	{ keys: ["⌘/Ctrl", "Z"], description: "元に戻す" },
 	{ keys: ["⌘/Ctrl", "Shift", "Z"], description: "やり直す" },
 	{ keys: ["Esc"], description: "図形の描画をキャンセル" },
@@ -224,8 +261,11 @@ interface PixelEditorInitialValues {
 
 export function PixelEditor({
 	initialValues,
+	active = true,
 }: {
 	initialValues?: PixelEditorInitialValues;
+	/** タブが表示中かどうか（非表示中はショートカットを無効化） */
+	active?: boolean;
 } = {}) {
 	const initSize = initialValues?.pixelCanvasSize ?? 32;
 	const initGrid = initialValues?.pixelData ?? createEmptyGrid(initSize);
@@ -257,6 +297,9 @@ export function PixelEditor({
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [outputFormat, setOutputFormat] = useState<"png" | "gif">("png");
 	const [isSavingGif, setIsSavingGif] = useState(false);
+	const [zoom, setZoom] = useState(1);
+	const [showGrid, setShowGrid] = useState(true);
+	const [hoverCell, setHoverCell] = useState<Cell | null>(null);
 
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const miniCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -375,6 +418,17 @@ export function PixelEditor({
 		[size],
 	);
 
+	/** クリック位置の色を拾って描画色にする（スポイト / Alt+クリック） */
+	const pickColorAt = useCallback(
+		(row: number, col: number) => {
+			const picked = frames[currentFrame]?.[row]?.[col];
+			if (!picked) return;
+			setDrawColor(picked);
+			setCustomColor(picked);
+		},
+		[frames, currentFrame],
+	);
+
 	const handlePointerDown = useCallback(
 		(e: React.PointerEvent<HTMLCanvasElement>) => {
 			e.preventDefault();
@@ -382,6 +436,30 @@ export function PixelEditor({
 			e.currentTarget.setPointerCapture(e.pointerId);
 			const [row, col] = getGridPos(e);
 			if (row < 0 || row >= size || col < 0 || col >= size) return;
+
+			// Alt+クリックはツールに関わらずその場でスポイト
+			if (e.altKey || activeTool === "eyedropper") {
+				pickColorAt(row, col);
+				// スポイトツールで拾ったらペンに戻す（すぐ描ける）
+				if (activeTool === "eyedropper") setActiveTool("pencil");
+				return;
+			}
+
+			if (activeTool === "bucket") {
+				const cells = floodFill(frames[currentFrame], row, col, drawColor);
+				if (cells.length > 0) {
+					const newFrames = frames.map((f, fi) => {
+						if (fi !== currentFrame) return f;
+						const g = f.map((r) => [...r]);
+						for (const [cr, cc] of cells) g[cr][cc] = drawColor;
+						return g;
+					});
+					setFrames(newFrames);
+					saveToHistory(newFrames);
+				}
+				return;
+			}
+
 			if (SHAPE_TOOLS.includes(activeTool)) {
 				setShapeAnchor([row, col]);
 				setPreviewCells([[row, col]]);
@@ -391,12 +469,26 @@ export function PixelEditor({
 			setIsDrawing(true);
 			drawCell(row, col);
 		},
-		[getGridPos, size, activeTool, drawCell],
+		[
+			getGridPos,
+			size,
+			activeTool,
+			drawCell,
+			pickColorAt,
+			frames,
+			currentFrame,
+			drawColor,
+			saveToHistory,
+		],
 	);
 
 	const handlePointerMove = useCallback(
 		(e: React.PointerEvent<HTMLCanvasElement>) => {
 			const [row, col] = getGridPos(e);
+			// ホバー中のセルをハイライト（描画精度の向上）
+			setHoverCell(
+				row >= 0 && row < size && col >= 0 && col < size ? [row, col] : null,
+			);
 			if (shapeAnchor) {
 				setPreviewCells(
 					computeShapeCells(shapeAnchor[0], shapeAnchor[1], row, col).filter(
@@ -439,6 +531,10 @@ export function PixelEditor({
 		saveToHistory,
 	]);
 
+	const handlePointerLeaveCanvas = useCallback(() => {
+		setHoverCell(null);
+	}, []);
+
 	const handlePointerUpOrLeave = useCallback(() => {
 		if (shapeAnchor) {
 			commitShape();
@@ -466,10 +562,12 @@ export function PixelEditor({
 		togglePlay: () => {},
 		selectFrame: (_i: number) => {},
 		frameCount: 1,
+		active: true,
 	});
 
 	useEffect(() => {
 		const onKeyDown = (e: KeyboardEvent) => {
+			if (!shortcutRef.current.active) return;
 			const target = e.target as HTMLElement | null;
 			if (
 				target instanceof HTMLInputElement ||
@@ -513,10 +611,26 @@ export function PixelEditor({
 				return;
 			}
 
+			// ズーム / グリッド表示
+			if (e.key === "+" || e.key === "=") {
+				setZoom((z) => Math.min(ZOOM_MAX, z + ZOOM_STEP));
+				return;
+			}
+			if (e.key === "-") {
+				setZoom((z) => Math.max(ZOOM_MIN, z - ZOOM_STEP));
+				return;
+			}
+			if (e.key.toLowerCase() === "g") {
+				setShowGrid((v) => !v);
+				return;
+			}
+
 			// ツール切替
 			const toolByKey: Record<string, ToolType> = {
 				p: "pencil",
 				e: "eraser",
+				f: "bucket",
+				i: "eyedropper",
 				l: "line",
 				r: "rect",
 				c: "circle",
@@ -536,6 +650,24 @@ export function PixelEditor({
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
+	}, []);
+
+	// Ctrl/⌘ + ホイールでズーム（ブラウザのページズームは抑止）
+	useEffect(() => {
+		const canvas = canvasRef.current;
+		if (!canvas) return;
+		const onWheel = (e: WheelEvent) => {
+			if (!(e.ctrlKey || e.metaKey)) return;
+			e.preventDefault();
+			setZoom((z) =>
+				Math.min(
+					ZOOM_MAX,
+					Math.max(ZOOM_MIN, z + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)),
+				),
+			);
+		};
+		canvas.addEventListener("wheel", onWheel, { passive: false });
+		return () => canvas.removeEventListener("wheel", onWheel);
 	}, []);
 
 	// ---- Frame management ----
@@ -666,7 +798,22 @@ export function PixelEditor({
 			ctx.globalAlpha = 1;
 		}
 
-		ctx.drawImage(gridLayerRef.current, 0, 0);
+		if (showGrid) {
+			ctx.drawImage(gridLayerRef.current, 0, 0);
+		}
+
+		// ホバー中のセルを枠でハイライト
+		if (hoverCell && !isPlaying) {
+			const [hr, hc] = hoverCell;
+			ctx.strokeStyle = "rgba(139, 92, 246, 0.9)";
+			ctx.lineWidth = 2;
+			ctx.strokeRect(
+				hc * cellSize + 1,
+				hr * cellSize + 1,
+				cellSize - 2,
+				cellSize - 2,
+			);
+		}
 	}, [
 		frames,
 		currentFrame,
@@ -675,6 +822,9 @@ export function PixelEditor({
 		activeTool,
 		size,
 		cellSize,
+		showGrid,
+		hoverCell,
+		isPlaying,
 	]);
 
 	useEffect(() => {
@@ -852,6 +1002,7 @@ export function PixelEditor({
 		togglePlay: () => setIsPlaying((p) => !p),
 		selectFrame: (i: number) => setCurrentFrame(i),
 		frameCount: frames.length,
+		active,
 	};
 
 	return (
@@ -960,24 +1111,83 @@ export function PixelEditor({
 								</AlertDialogFooter>
 							</AlertDialogContent>
 						</AlertDialog>
+						<div className="mx-1 h-6 w-px bg-border" />
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => setShowGrid((v) => !v)}
+							title={`グリッド線 ${showGrid ? "非表示" : "表示"} (G)`}
+							aria-label="グリッド線の表示切替"
+							aria-pressed={showGrid}
+							className={cn("px-2.5", !showGrid && "text-muted-foreground/50")}
+						>
+							<Grid3X3 className="h-4 w-4" />
+						</Button>
+						<div className="flex items-center gap-0.5">
+							<Button
+								variant="ghost"
+								size="sm"
+								onClick={() =>
+									setZoom((z) => Math.max(ZOOM_MIN, z - ZOOM_STEP))
+								}
+								disabled={zoom <= ZOOM_MIN}
+								title="ズームアウト (−)"
+								aria-label="ズームアウト"
+								className="px-2"
+							>
+								<ZoomOut className="h-4 w-4" />
+							</Button>
+							<button
+								type="button"
+								onClick={() => setZoom(1)}
+								title="クリックで 100% に戻す"
+								className="min-w-[3rem] text-center text-xs tabular-nums text-muted-foreground hover:text-foreground transition"
+							>
+								{Math.round(zoom * 100)}%
+							</button>
+							<Button
+								variant="ghost"
+								size="sm"
+								onClick={() =>
+									setZoom((z) => Math.min(ZOOM_MAX, z + ZOOM_STEP))
+								}
+								disabled={zoom >= ZOOM_MAX}
+								title="ズームイン (+)"
+								aria-label="ズームイン"
+								className="px-2"
+							>
+								<ZoomIn className="h-4 w-4" />
+							</Button>
+						</div>
 						<div className="ml-auto">
-							<ShortcutHelp shortcuts={PIXEL_SHORTCUTS} />
+							<ShortcutHelp shortcuts={PIXEL_SHORTCUTS} enabled={active} />
 						</div>
 					</div>
 
-					{/* キャンバス */}
-					<div className="rounded-xl border bg-muted p-2 sm:p-3 w-full">
+					{/* キャンバス（ズーム時はスクロールでパン） */}
+					<div
+						className="rounded-xl border bg-muted p-2 sm:p-3 w-full overflow-auto"
+						style={{ maxHeight: "min(72vh, 640px)" }}
+					>
 						<canvas
 							ref={canvasRef}
 							aria-label="ピクセル描画キャンバス"
 							width={FIXED_DISPLAY_SIZE}
 							height={FIXED_DISPLAY_SIZE}
-							className={`block touch-none select-none w-full h-auto aspect-square rounded-lg ${isPlaying ? "cursor-default" : "cursor-crosshair"}`}
-							style={{ imageRendering: "pixelated" }}
+							className={`block touch-none select-none rounded-lg mx-auto ${isPlaying ? "cursor-default" : "cursor-crosshair"}`}
+							style={{
+								imageRendering: "pixelated",
+								width: Math.round(BASE_DISPLAY_SIZE * zoom),
+								height: Math.round(BASE_DISPLAY_SIZE * zoom),
+								maxWidth: zoom <= 1 ? "100%" : undefined,
+							}}
 							onPointerDown={isPlaying ? undefined : handlePointerDown}
 							onPointerMove={isPlaying ? undefined : handlePointerMove}
 							onPointerUp={isPlaying ? undefined : handlePointerUpOrLeave}
-							onPointerLeave={isPlaying ? undefined : handlePointerUpOrLeave}
+							onPointerLeave={() => {
+								handlePointerLeaveCanvas();
+								if (!isPlaying) handlePointerUpOrLeave();
+							}}
 							onContextMenu={(e) => e.preventDefault()}
 						/>
 					</div>
@@ -1156,7 +1366,7 @@ export function PixelEditor({
 			</div>
 
 			{/* ==== 操作バー（常時表示） ==== */}
-			<div className="sticky bottom-0 z-40 mt-6 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+			<div className="sticky bottom-0 z-40 mt-6 -mx-4 border-t bg-card/95 px-4 py-3 shadow-[0_-1px_3px_rgba(0,0,0,0.04)] backdrop-blur supports-[backdrop-filter]:bg-card/85">
 				<div className="flex items-center justify-end gap-2">
 					{isAnimated && (
 						<div className="mr-auto flex rounded-lg border p-0.5">

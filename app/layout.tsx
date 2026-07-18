@@ -1,47 +1,77 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { TRPCReactProvider } from "@/lib/trpc/react";
-import { Header } from "@/components/layout/header";
 import { Footer } from "@/components/layout/footer";
+import { Header } from "@/components/layout/header";
+import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/sonner";
+import { TRPCReactProvider } from "@/lib/trpc/react";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
+const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+
 export const metadata: Metadata = {
-  title: "emoCraft",
-  description: "カスタム絵文字をSlack用に作成",
+	metadataBase: new URL(appUrl),
+	title: {
+		default: "emoCraft — Slack絵文字メーカー",
+		template: "%s | emoCraft",
+	},
+	description:
+		"テキストやピクセルアートから Slack 用のカスタム絵文字を簡単に作成。アニメーション GIF にも対応。",
+	openGraph: {
+		title: "emoCraft — Slack絵文字メーカー",
+		description:
+			"テキストやピクセルアートから Slack 用のカスタム絵文字を簡単に作成。アニメーション GIF にも対応。",
+		url: appUrl,
+		siteName: "emoCraft",
+		locale: "ja_JP",
+		type: "website",
+	},
+	twitter: {
+		card: "summary",
+		title: "emoCraft — Slack絵文字メーカー",
+		description:
+			"テキストやピクセルアートから Slack 用のカスタム絵文字を簡単に作成。",
+	},
 };
 
-const FONT_URL_1 =
-  "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&family=Noto+Serif+JP:wght@400;700;900&family=M+PLUS+Rounded+1c:wght@400;700;900&family=Kosugi+Maru&family=Zen+Maru+Gothic:wght@400;700;900&family=Zen+Kaku+Gothic+New:wght@400;700;900&family=BIZ+UDPGothic:wght@400;700&display=swap";
-
-const FONT_URL_2 =
-  "https://fonts.googleapis.com/css2?family=DotGothic16&family=Dela+Gothic+One&family=Hachi+Maru+Pop&family=Pacifico&family=Zen+Antique:wght@400;700&family=Kaisei+Decol:wght@400;700&family=New+Tegomin&family=Yomogi&family=Reggae+One&family=RocknRoll+One&display=swap";
+// ブランドロゴ用フォントのみグローバルに読み込む。
+// エディター用の16フォントは app/editor/layout.tsx でのみ読み込む。
+const BRAND_FONT_URL =
+	"https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@700;900&display=swap";
 
 export default function RootLayout({
-  children,
+	children,
 }: Readonly<{ children: React.ReactNode }>) {
-  return (
-    <html lang="ja">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin=""
-        />
-        <link href={FONT_URL_1} rel="stylesheet" />
-        <link href={FONT_URL_2} rel="stylesheet" />
-      </head>
-      <body className={`${inter.variable} font-sans`}>
-        <TRPCReactProvider>
-          <div className="flex min-h-screen flex-col">
-            <Header />
-            <main className="flex-1">{children}</main>
-            <Footer />
-          </div>
-        </TRPCReactProvider>
-      </body>
-    </html>
-  );
+	return (
+		<html lang="ja" suppressHydrationWarning>
+			<head>
+				<link rel="preconnect" href="https://fonts.googleapis.com" />
+				<link
+					rel="preconnect"
+					href="https://fonts.gstatic.com"
+					crossOrigin=""
+				/>
+				<link href={BRAND_FONT_URL} rel="stylesheet" />
+			</head>
+			<body className={`${inter.variable} font-sans`}>
+				<ThemeProvider
+					attribute="class"
+					defaultTheme="system"
+					enableSystem
+					disableTransitionOnChange
+				>
+					<TRPCReactProvider>
+						<div className="flex min-h-screen flex-col">
+							<Header />
+							<main className="flex-1">{children}</main>
+							<Footer />
+						</div>
+						<Toaster />
+					</TRPCReactProvider>
+				</ThemeProvider>
+			</body>
+		</html>
+	);
 }

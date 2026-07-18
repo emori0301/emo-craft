@@ -91,17 +91,17 @@ model Emoji {
   fontFamily      String?
   backgroundColor String?
   textColor       String?
-  canvasSize      Int        @default(128)
   pixelData       Json?
   pixelCanvasSize Int?
-  imageUrl        String?
+  imageData       Bytes
+  imageMimeType   String     @default("image/png")
   isPublic        Boolean    @default(false)
   user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
-  @@index([userId])
-  @@index([isPublic])
+  @@index([userId, createdAt])
+  @@index([isPublic, createdAt])
   @@map("emojis")
 }
 

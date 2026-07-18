@@ -1,14 +1,33 @@
 declare module "gifenc" {
-  export function GIFEncoder(): {
-    writeFrame(
-      index: Uint8Array,
-      width: number,
-      height: number,
-      options?: { palette?: Uint8Array; delay?: number; repeat?: number }
-    ): void;
-    finish(): void;
-    bytes(): Uint8Array;
-  };
-  export function quantize(data: Uint8ClampedArray, maxColors: number): Uint8Array;
-  export function applyPalette(data: Uint8ClampedArray, palette: Uint8Array): Uint8Array;
+	export type GifPalette = number[][];
+
+	export function GIFEncoder(): {
+		writeFrame(
+			index: Uint8Array,
+			width: number,
+			height: number,
+			options?: {
+				palette?: GifPalette;
+				delay?: number;
+				repeat?: number;
+				transparent?: boolean;
+				transparentIndex?: number;
+				dispose?: number;
+			},
+		): void;
+		finish(): void;
+		bytes(): Uint8Array<ArrayBuffer>;
+	};
+
+	export function quantize(
+		data: Uint8ClampedArray | Uint8Array,
+		maxColors: number,
+		options?: { format?: "rgb565" | "rgb444" | "rgba4444" },
+	): GifPalette;
+
+	export function applyPalette(
+		data: Uint8ClampedArray | Uint8Array,
+		palette: GifPalette,
+		format?: "rgb565" | "rgb444" | "rgba4444",
+	): Uint8Array;
 }

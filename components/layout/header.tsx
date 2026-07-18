@@ -1,20 +1,38 @@
 "use client";
 
+import { Menu, X } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { authClient } from "@/lib/auth/client";
 
 export function Header() {
 	const { data: session, isPending } = authClient.useSession();
-	const [allowClick, setAllowClick] = useState(false);
+	const [menuOpen, setMenuOpen] = useState(false);
+	const closeMenu = () => setMenuOpen(false);
 
-	useEffect(() => {
-		const t = setTimeout(() => setAllowClick(true), 1500);
-		return () => clearTimeout(t);
-	}, []);
-
-	const showLoginButton = !isPending || allowClick;
+	const authControls = session ? (
+		<div className="flex items-center gap-2">
+			<span className="hidden sm:inline text-sm text-muted-foreground truncate max-w-24">
+				{session.user.name ?? session.user.email}
+			</span>
+			<Button variant="outline" size="sm" onClick={() => authClient.signOut()}>
+				ログアウト
+			</Button>
+		</div>
+	) : isPending ? (
+		<Skeleton className="h-9 w-36 rounded-md" />
+	) : (
+		<Button
+			variant="outline"
+			size="sm"
+			onClick={() => authClient.signIn.social({ provider: "google" })}
+		>
+			Googleでログイン
+		</Button>
+	);
 
 	return (
 		<header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -30,42 +48,61 @@ export function Header() {
 						emoCraft
 					</span>
 				</Link>
-				<nav className="flex items-center gap-2">
-					<Link href="/editor">
-						<Button variant="ghost" size="sm" className="hidden sm:flex">
-							編集
+				<nav
+					className="flex items-center gap-2"
+					aria-label="メインナビゲーション"
+				>
+					<Link href="/editor" className="hidden sm:block">
+						<Button variant="ghost" size="sm">
+							エディター
 						</Button>
 					</Link>
-					<Link href="/my-emojis">
-						<Button variant="ghost" size="sm" className="hidden sm:flex">
+					<Link href="/my-emojis" className="hidden sm:block">
+						<Button variant="ghost" size="sm">
 							マイ絵文字
 						</Button>
 					</Link>
-					{session ? (
-						<div className="flex items-center gap-2">
-							<span className="hidden sm:inline text-sm text-muted-foreground truncate max-w-24">
-								{session.user.name ?? session.user.email}
-							</span>
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => authClient.signOut()}
-							>
-								ログアウト
-							</Button>
-						</div>
-					) : (
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={() => authClient.signIn.social({ provider: "google" })}
-							disabled={!showLoginButton}
-						>
-							{showLoginButton ? "Googleでログイン" : "..."}
-						</Button>
-					)}
+					{authControls}
+					<ThemeToggle />
+					<Button
+						variant="ghost"
+						size="sm"
+						className="sm:hidden px-2"
+						aria-label={menuOpen ? "メニューを閉じる" : "メニューを開く"}
+						aria-expanded={menuOpen}
+						onClick={() => setMenuOpen((o) => !o)}
+					>
+						{menuOpen ? (
+							<X className="h-5 w-5" />
+						) : (
+							<Menu className="h-5 w-5" />
+						)}
+					</Button>
 				</nav>
 			</div>
+
+			{/* モバイルメニュー */}
+			{menuOpen && (
+				<nav
+					className="sm:hidden border-t bg-background px-4 py-2 flex flex-col"
+					aria-label="モバイルナビゲーション"
+				>
+					<Link
+						href="/editor"
+						onClick={closeMenu}
+						className="py-2.5 text-sm font-medium hover:text-primary transition-colors"
+					>
+						エディター
+					</Link>
+					<Link
+						href="/my-emojis"
+						onClick={closeMenu}
+						className="py-2.5 text-sm font-medium hover:text-primary transition-colors"
+					>
+						マイ絵文字
+					</Link>
+				</nav>
+			)}
 		</header>
 	);
 }

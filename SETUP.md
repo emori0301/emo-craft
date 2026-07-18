@@ -39,7 +39,7 @@ brew services start postgresql@16
 ### データベースの作成
 
 ```bash
-createdb slack_emoji_generator
+createdb emocraft
 ```
 
 ### 環境変数の設定
@@ -47,7 +47,7 @@ createdb slack_emoji_generator
 `.env`ファイルの`DATABASE_URL`を以下のように変更：
 
 ```
-DATABASE_URL="postgresql://[ユーザー名]:[パスワード]@localhost:5432/slack_emoji_generator?schema=public"
+DATABASE_URL="postgresql://[ユーザー名]:[パスワード]@localhost:5432/emocraft?schema=public"
 ```
 
 デフォルトのPostgreSQLユーザー名は、macOSのユーザー名と同じです。パスワードが設定されていない場合は、パスワード部分を空にできます。

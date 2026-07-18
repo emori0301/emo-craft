@@ -1,99 +1,179 @@
-import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure, publicProcedure } from "../trpc";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { uploadImageToS3, deleteImageFromS3, getS3KeyFromUrl } from "@/lib/s3";
+import { protectedProcedure, publicProcedure, router } from "../trpc";
+
+/** デコード後の画像バイト数上限（約1.5MB — 128px 絵文字には十分） */
+const MAX_IMAGE_BYTES = 1_500_000;
+
+/** 一覧・作成結果で返す公開フィールド（imageData / pixelData / userId は返さない） */
+const listSelect = {
+	id: true,
+	name: true,
+	editorType: true,
+	imageMimeType: true,
+	isPublic: true,
+	createdAt: true,
+} as const;
+
+/**
+ * base64 データ URL を検証してデコードする。
+ * MIME タイプはヘッダを信用せず、マジックバイトで判定する。
+ */
+function decodeImageDataUrl(dataUrl: string): {
+	buffer: Buffer;
+	mimeType: "image/png" | "image/gif";
+} {
+	const commaIndex = dataUrl.indexOf(",");
+	if (!dataUrl.startsWith("data:") || commaIndex === -1) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "画像データの形式が不正です",
+		});
+	}
+	const buffer = Buffer.from(dataUrl.slice(commaIndex + 1), "base64");
+	if (buffer.length === 0 || buffer.length > MAX_IMAGE_BYTES) {
+		throw new TRPCError({
+			code: "PAYLOAD_TOO_LARGE",
+			message: "画像サイズが大きすぎます（上限 1.5MB）",
+		});
+	}
+
+	// マジックバイト: PNG = 89 50 4E 47, GIF = "GIF8"
+	const isPng =
+		buffer.length > 8 &&
+		buffer[0] === 0x89 &&
+		buffer[1] === 0x50 &&
+		buffer[2] === 0x4e &&
+		buffer[3] === 0x47;
+	const isGif =
+		buffer.length > 6 && buffer.subarray(0, 4).toString("latin1") === "GIF8";
+	if (!isPng && !isGif) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "PNG または GIF 画像のみ保存できます",
+		});
+	}
+	return { buffer, mimeType: isPng ? "image/png" : "image/gif" };
+}
 
 export const emojiRouter = router({
-  create: protectedProcedure
-    .input(
-      z.object({
-        name: z.string().min(1).max(50),
-        editorType: z.enum(["TEXT", "PIXEL"]),
-        imageData: z.string(),
-        isPublic: z.boolean(),
-        text: z.string().optional(),
-        fontSize: z.number().optional(),
-        fontWeight: z.number().optional(),
-        fontFamily: z.string().optional(),
-        textColor: z.string().optional(),
-        backgroundColor: z.string().optional(),
-        pixelData: z.any().optional(),
-        pixelCanvasSize: z.number().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const emojiId = crypto.randomUUID();
-      const ext = input.imageData.startsWith("data:image/gif") ? "gif" : "png";
-      const key = `emojis/${ctx.userId}/${emojiId}.${ext}`;
+	create: protectedProcedure
+		.input(
+			z.object({
+				name: z.string().min(1).max(50),
+				editorType: z.enum(["TEXT", "PIXEL"]),
+				// base64 は元バイナリの約 4/3 倍 + ヘッダ分の余裕
+				imageData: z.string().max(2_100_000),
+				isPublic: z.boolean(),
+				text: z.string().optional(),
+				fontSize: z.number().optional(),
+				fontWeight: z.number().optional(),
+				fontFamily: z.string().optional(),
+				textColor: z.string().optional(),
+				backgroundColor: z.string().optional(),
+				pixelData: z.array(z.array(z.string())).optional(),
+				pixelCanvasSize: z.number().optional(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const { buffer, mimeType } = decodeImageDataUrl(input.imageData);
 
-      const imageUrl = await uploadImageToS3(key, input.imageData);
+			return prisma.emoji.create({
+				data: {
+					userId: ctx.userId,
+					name: input.name,
+					editorType: input.editorType,
+					imageData: new Uint8Array(buffer),
+					imageMimeType: mimeType,
+					isPublic: input.isPublic,
+					text: input.text,
+					fontSize: input.fontSize,
+					fontWeight: input.fontWeight,
+					fontFamily: input.fontFamily,
+					textColor: input.textColor,
+					backgroundColor: input.backgroundColor,
+					pixelData: input.pixelData,
+					pixelCanvasSize: input.pixelCanvasSize,
+				},
+				select: listSelect,
+			});
+		}),
 
-      const emoji = await prisma.emoji.create({
-        data: {
-          id: emojiId,
-          userId: ctx.userId,
-          name: input.name,
-          editorType: input.editorType,
-          imageUrl,
-          isPublic: input.isPublic,
-          text: input.text,
-          fontSize: input.fontSize,
-          fontWeight: input.fontWeight,
-          fontFamily: input.fontFamily,
-          textColor: input.textColor,
-          backgroundColor: input.backgroundColor,
-          pixelData: input.pixelData,
-          pixelCanvasSize: input.pixelCanvasSize,
-        },
-      });
-      return emoji;
-    }),
+	listMine: protectedProcedure
+		.input(
+			z.object({
+				limit: z.number().min(1).max(50).default(30),
+				cursor: z.string().uuid().nullish(),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const items = await prisma.emoji.findMany({
+				where: { userId: ctx.userId },
+				orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+				take: input.limit + 1,
+				...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+				select: listSelect,
+			});
+			let nextCursor: string | undefined;
+			if (items.length > input.limit) {
+				nextCursor = items.pop()?.id;
+			}
+			return { items, nextCursor };
+		}),
 
-  listMine: protectedProcedure.query(async ({ ctx }) => {
-    return prisma.emoji.findMany({
-      where: { userId: ctx.userId },
-      orderBy: { createdAt: "desc" },
-    });
-  }),
+	listPublic: publicProcedure
+		.input(
+			z.object({
+				limit: z.number().min(1).max(50).default(12),
+				cursor: z.string().uuid().nullish(),
+			}),
+		)
+		.query(async ({ input }) => {
+			const items = await prisma.emoji.findMany({
+				where: { isPublic: true },
+				orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+				take: input.limit + 1,
+				...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+				select: listSelect,
+			});
+			let nextCursor: string | undefined;
+			if (items.length > input.limit) {
+				nextCursor = items.pop()?.id;
+			}
+			return { items, nextCursor };
+		}),
 
-  listPublic: publicProcedure
-    .input(z.object({ limit: z.number().min(1).max(50).default(12) }))
-    .query(async ({ input }) => {
-      return prisma.emoji.findMany({
-        where: { isPublic: true },
-        orderBy: { createdAt: "desc" },
-        take: input.limit,
-      });
-    }),
+	getById: protectedProcedure
+		.input(z.object({ id: z.string().uuid() }))
+		.query(async ({ ctx, input }) => {
+			const emoji = await prisma.emoji.findFirst({
+				where: { id: input.id, userId: ctx.userId },
+				select: {
+					...listSelect,
+					text: true,
+					fontSize: true,
+					fontWeight: true,
+					fontFamily: true,
+					textColor: true,
+					backgroundColor: true,
+					pixelData: true,
+					pixelCanvasSize: true,
+				},
+			});
+			if (!emoji) throw new TRPCError({ code: "NOT_FOUND" });
+			return emoji;
+		}),
 
-  getById: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ ctx, input }) => {
-      const emoji = await prisma.emoji.findFirst({
-        where: { id: input.id, userId: ctx.userId },
-      });
-      if (!emoji) throw new TRPCError({ code: "NOT_FOUND" });
-      return emoji;
-    }),
-
-  delete: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
-    .mutation(async ({ ctx, input }) => {
-      const emoji = await prisma.emoji.findFirst({
-        where: { id: input.id, userId: ctx.userId },
-      });
-      if (!emoji) {
-        throw new TRPCError({ code: "NOT_FOUND" });
-      }
-
-      // S3 からも削除
-      if (emoji.imageUrl) {
-        const key = getS3KeyFromUrl(emoji.imageUrl);
-        if (key) await deleteImageFromS3(key).catch(() => null);
-      }
-
-      await prisma.emoji.delete({ where: { id: input.id } });
-      return { success: true };
-    }),
+	delete: protectedProcedure
+		.input(z.object({ id: z.string().uuid() }))
+		.mutation(async ({ ctx, input }) => {
+			const { count } = await prisma.emoji.deleteMany({
+				where: { id: input.id, userId: ctx.userId },
+			});
+			if (count === 0) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			return { success: true };
+		}),
 });

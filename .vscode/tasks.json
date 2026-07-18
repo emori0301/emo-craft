@@ -1,54 +1,53 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "dev",
-      "type": "shell",
-      "command": "npm run dev",
-      "problemMatcher": [],
-      "isBackground": true,
-      "presentation": {
-        "reveal": "always",
-        "panel": "new"
-      }
-    },
-    {
-      "label": "build",
-      "type": "shell",
-      "command": "npm run build",
-      "problemMatcher": []
-    },
-    {
-      "label": "lint",
-      "type": "shell",
-      "command": "npm run lint",
-      "problemMatcher": []
-    },
-    {
-      "label": "format",
-      "type": "shell",
-      "command": "npm run format",
-      "problemMatcher": []
-    },
-    {
-      "label": "db:generate",
-      "type": "shell",
-      "command": "npm run db:generate",
-      "problemMatcher": []
-    },
-    {
-      "label": "db:push",
-      "type": "shell",
-      "command": "npm run db:push",
-      "problemMatcher": []
-    },
-    {
-      "label": "db:studio",
-      "type": "shell",
-      "command": "npm run db:studio",
-      "problemMatcher": [],
-      "isBackground": true
-    }
-  ]
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "dev",
+			"type": "shell",
+			"command": "npm run dev",
+			"problemMatcher": [],
+			"isBackground": true,
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			}
+		},
+		{
+			"label": "build",
+			"type": "shell",
+			"command": "npm run build",
+			"problemMatcher": []
+		},
+		{
+			"label": "lint",
+			"type": "shell",
+			"command": "npm run lint",
+			"problemMatcher": []
+		},
+		{
+			"label": "format",
+			"type": "shell",
+			"command": "npm run format",
+			"problemMatcher": []
+		},
+		{
+			"label": "db:generate",
+			"type": "shell",
+			"command": "npm run db:generate",
+			"problemMatcher": []
+		},
+		{
+			"label": "db:push",
+			"type": "shell",
+			"command": "npm run db:push",
+			"problemMatcher": []
+		},
+		{
+			"label": "db:studio",
+			"type": "shell",
+			"command": "npm run db:studio",
+			"problemMatcher": [],
+			"isBackground": true
+		}
+	]
 }
-

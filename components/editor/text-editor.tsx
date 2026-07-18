@@ -1,784 +1,864 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
 import { Download, Save } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { LoginDialog } from "@/components/editor/login-dialog";
+import { SaveEmojiForm } from "@/components/editor/save-emoji-form";
+import {
+	ShortcutHelp,
+	type ShortcutItem,
+} from "@/components/editor/shortcut-help";
+import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { useSaveEmoji } from "@/hooks/use-save-emoji";
+import { EXPORT_SIZE } from "@/lib/editor/constants";
+import { downloadDataUrl } from "@/lib/editor/download";
+import {
+	clearDraft,
+	loadDraft,
+	type TextEditorDraft,
+} from "@/lib/editor/draft";
+import { encodeGifToDataUrl, type GifFrame } from "@/lib/editor/gif";
+import {
+	ANIM_CONFIGS,
+	type AnimConfig,
+	type AnimParams,
+	type AnimType,
+	AP0,
+	FONT_WEIGHTS,
+	FONTS,
+	TEXT_ALIGNS,
+	type TextAlign,
+	trimToLimit,
+} from "@/lib/editor/text-config";
 import { cn } from "@/lib/utils";
-import { api } from "@/lib/trpc/react";
-import { authClient } from "@/lib/auth/client";
-import type { EditorMode } from "@/lib/stores/editor-store";
-
-const FONTS = [
-  { value: "Noto Sans JP",          label: "ノトサン JP" },
-  { value: "Noto Serif JP",         label: "ノトセリフ JP" },
-  { value: "M PLUS Rounded 1c",     label: "Mプラスラウンド1c" },
-  { value: "Kosugi Maru",           label: "こすぎ丸" },
-  { value: "Zen Maru Gothic",       label: "ゼン・マル・ゴシック" },
-  { value: "Zen Kaku Gothic New",   label: "ゼン・カク・ゴシック New" },
-  { value: "BIZ UDPGothic",         label: "BIZ UDPゴシック" },
-  { value: "DotGothic16",           label: "ドットゴシック16" },
-  { value: "Dela Gothic One",       label: "デラゴシック" },
-  { value: "Hachi Maru Pop",        label: "はちまるポップ" },
-  { value: "Zen Antique",           label: "ゼン・アンティーク" },
-  { value: "Kaisei Decol",          label: "楷書でこる" },
-  { value: "New Tegomin",           label: "新でこみん" },
-  { value: "Yomogi",                label: "よもぎ" },
-  { value: "Reggae One",            label: "レゲエ" },
-  { value: "RocknRoll One",         label: "ロックンロール" },
-];
-
-const FONT_WEIGHTS = [
-  { value: "400", label: "標準" },
-  { value: "700", label: "太字" },
-  { value: "900", label: "極太" },
-];
-
-type TextAlign = "left" | "center" | "right";
-const TEXT_ALIGNS: { value: TextAlign; label: string }[] = [
-  { value: "left",   label: "左揃え" },
-  { value: "center", label: "中央揃え" },
-  { value: "right",  label: "右揃え" },
-];
-
-type AnimType =
-  | "fadeIn" | "blink" | "flash"
-  | "scroll" | "slideUp" | "slideDown"
-  | "zoomIn" | "zoomOut" | "pulse"
-  | "bounce" | "shake" | "spin"
-  | "rainbow" | "neon" | "glitch" | "typewriter";
-
-type AnimParams = {
-  alpha: number;
-  offsetX: number;
-  offsetY: number;
-  hueShift: number;
-  scale: number;
-  rotate: number;
-  shadowBlur: number;
-  shadowColor: string;
-  clipReveal: number; // 0-1: typewriter left-to-right reveal
-};
-
-const AP0: AnimParams = {
-  alpha: 1, offsetX: 0, offsetY: 0, hueShift: 0,
-  scale: 1, rotate: 0, shadowBlur: 0, shadowColor: "", clipReveal: 1,
-};
-
-type AnimConfig = {
-  label: string;
-  icon: string;
-  frames: number;
-  delay: number;
-  getParams: (f: number, t: number, s: number) => AnimParams;
-};
-
-const ANIM_CONFIGS: Record<AnimType, AnimConfig> = {
-  fadeIn:     { label: "Fade In",    icon: "✨", frames: 10, delay: 80,  getParams: (f,t)   => ({ ...AP0, alpha: f / (t-1) }) },
-  blink:      { label: "Blink",      icon: "💫", frames: 6,  delay: 300, getParams: (f)     => ({ ...AP0, alpha: f%2===0 ? 1 : 0 }) },
-  flash:      { label: "Flash",      icon: "⚡", frames: 8,  delay: 60,  getParams: (f)     => ({ ...AP0, alpha: f%2===0 ? 1 : 0.05 }) },
-  scroll:     { label: "Scroll →",   icon: "▶️", frames: 14, delay: 70,  getParams: (f,t,s) => ({ ...AP0, offsetX: Math.round(s*(1-f/(t-1))) }) },
-  slideUp:    { label: "Slide Up",   icon: "⬆️", frames: 12, delay: 70,  getParams: (f,t,s) => ({ ...AP0, offsetY: Math.round(s*(1-f/(t-1))) }) },
-  slideDown:  { label: "Slide Down", icon: "⬇️", frames: 12, delay: 70,  getParams: (f,t,s) => ({ ...AP0, offsetY: Math.round(-s*(1-f/(t-1))) }) },
-  zoomIn:     { label: "Zoom In",    icon: "🔍", frames: 10, delay: 80,  getParams: (f,t)   => ({ ...AP0, scale: 0.05 + 0.95*(f/(t-1)) }) },
-  zoomOut:    { label: "Zoom Out",   icon: "🔎", frames: 10, delay: 80,  getParams: (f,t)   => ({ ...AP0, scale: 1 - 0.95*(f/(t-1)) }) },
-  pulse:      { label: "Pulse",      icon: "💗", frames: 14, delay: 70,  getParams: (f,t)   => ({ ...AP0, scale: 0.8 + 0.25*Math.abs(Math.sin(f/t*Math.PI*2)) }) },
-  bounce:     { label: "Bounce",     icon: "🏀", frames: 14, delay: 70,  getParams: (f,t,s) => ({ ...AP0, offsetY: Math.round(-Math.abs(Math.sin(f/t*Math.PI*2))*s*0.14) }) },
-  shake:      { label: "Shake",      icon: "📳", frames: 10, delay: 55,  getParams: (f,_,s) => ({ ...AP0, offsetX: Math.round(Math.sin(f*3.14)*s*0.05) }) },
-  spin:       { label: "Spin",       icon: "🌀", frames: 12, delay: 70,  getParams: (f,t)   => ({ ...AP0, rotate: 360*f/t, scale: 0.65 }) },
-  rainbow:    { label: "Rainbow",    icon: "🌈", frames: 16, delay: 60,  getParams: (f,t)   => ({ ...AP0, hueShift: 360*f/t }) },
-  neon:       { label: "Neon",       icon: "💡", frames: 14, delay: 75,  getParams: (f,t,s) => ({ ...AP0, shadowBlur: s*0.10*Math.abs(Math.sin(f/t*Math.PI*2)), shadowColor: "#ffffff" }) },
-  glitch:     { label: "Glitch",     icon: "👾", frames: 8,  delay: 60,  getParams: (f,_,s) => ({ ...AP0, offsetX: Math.round(Math.sin(f*2.3)*s*0.025), hueShift: (f*87)%360 }) },
-  typewriter: { label: "Typewriter", icon: "⌨️", frames: 14, delay: 80,  getParams: (f,t)   => ({ ...AP0, clipReveal: f/(t-1) }) },
-};
-
-const CARD_STYLES: Record<EditorMode, string> = {
-  normal: "",
-  fancy:  "border-pink-200 bg-white/80 backdrop-blur-sm",
-  retro:  "bg-[#0a0a0a] border-white/30 text-white",
-  space:  "bg-[#050e1f] border-blue-900 text-blue-100",
-};
-
-const LABEL_STYLES: Record<EditorMode, string> = {
-  normal: "",
-  fancy:  "text-pink-800",
-  retro:  "text-white",
-  space:  "text-blue-200",
-};
-
-const INPUT_STYLES: Record<EditorMode, string> = {
-  normal: "bg-background border-input",
-  fancy:  "bg-pink-50/50 border-pink-200 focus:border-pink-400",
-  retro:  "bg-[#1a1a1a] border-white/30 text-white placeholder:text-white/40",
-  space:  "bg-[#050e1f] border-blue-900 text-blue-100 placeholder:text-blue-900",
-};
-
-const HINT_STYLES: Record<EditorMode, string> = {
-  normal: "text-muted-foreground",
-  fancy:  "text-pink-400",
-  retro:  "text-white/60",
-  space:  "text-blue-700",
-};
-
-const UI_FONT_STYLES: Record<EditorMode, string> = {
-  normal: "",
-  fancy:  "font-['Pacifico']",
-  retro:  "font-['DotGothic16']",
-  space:  "font-['Zen Kaku Gothic New']",
-};
-
-type FrameConfig = {
-  areaClass: string;
-  wrapperClass: string;
-  wrapperStyle: React.CSSProperties;
-  innerClass?: string;
-  defaultCanvasBg: string;
-  decoration?: React.ReactNode;
-};
-
-const FRAME_CONFIGS: Record<EditorMode, FrameConfig> = {
-  normal: {
-    areaClass:      "bg-gray-50 rounded-xl",
-    wrapperClass:   "rounded-xl border-4 border-gray-300 overflow-hidden shadow",
-    wrapperStyle:   {},
-    defaultCanvasBg: "#ffffff",
-  },
-  fancy: {
-    areaClass:    "bg-gradient-to-br from-pink-100 via-purple-50 to-yellow-100 rounded-2xl",
-    wrapperClass: "rounded-2xl overflow-hidden",
-    wrapperStyle: {
-      padding: "3px",
-      background: "linear-gradient(135deg, #ec4899, #a855f7, #f59e0b, #ec4899)",
-      boxShadow: "0 0 0 2px white, 0 0 20px rgba(236,72,153,0.5), 0 4px 20px rgba(168,85,247,0.3)",
-    },
-    innerClass:      "rounded-[10px] overflow-hidden bg-white",
-    defaultCanvasBg: "#ffffff",
-  },
-  retro: {
-    areaClass:    "bg-gray-50 rounded-lg",
-    wrapperClass: "overflow-hidden",
-    wrapperStyle: { boxShadow: "0 0 0 3px #000000", imageRendering: "pixelated" },
-    defaultCanvasBg: "#ffffff",
-    decoration: (
-      <p className="font-['DotGothic16'] text-gray-800 text-xs tracking-[0.3em] mt-3 animate-pulse">
-        ▶ PRESS ANY KEY ◀
-      </p>
-    ),
-  },
-  space: {
-    areaClass:    "bg-[#020817] rounded-xl",
-    wrapperClass: "rounded-lg overflow-hidden",
-    wrapperStyle: {
-      boxShadow: "0 0 0 2px #38bdf8, 0 0 20px rgba(56,189,248,0.6), 0 0 40px rgba(14,165,233,0.2)",
-    },
-    defaultCanvasBg: "#ffffff",
-    decoration: (
-      <p className="font-['Zen Kaku Gothic New'] text-blue-400 text-xs tracking-[0.3em] mt-3">
-        ◈ SIGNAL ACQUIRED ◈
-      </p>
-    ),
-  },
-};
 
 interface TextEditorInitialValues {
-  text?: string;
-  fontFamily?: string;
-  fontWeight?: string;
-  textColor?: string;
-  backgroundColor?: string;
+	text?: string;
+	fontFamily?: string;
+	fontWeight?: string;
+	textColor?: string;
+	backgroundColor?: string;
 }
 
 interface TextEditorProps {
-  mode: EditorMode;
-  initialValues?: TextEditorInitialValues;
+	initialValues?: TextEditorInitialValues;
 }
 
 const RENDER_SCALE = 4;
-const EXPORT_SIZE = 128;
 
-export function TextEditor({ mode, initialValues }: TextEditorProps) {
-  const [text, setText] = useState(initialValues?.text ?? "よろ\nしく");
-  const [fontWeight, setFontWeight] = useState(initialValues?.fontWeight ?? "700");
-  const [fontFamily, setFontFamily] = useState(initialValues?.fontFamily ?? "Noto Sans JP");
-  const [textAlign, setTextAlign] = useState<TextAlign>("center");
-  const [textColor, setTextColor] = useState(initialValues?.textColor ?? "#000000");
-  const [backgroundColor, setBackgroundColor] = useState(initialValues?.backgroundColor ?? "");
-  const [isComposing, setIsComposing] = useState(false);
-  const [outputFormat, setOutputFormat] = useState<"png" | "gif">("png");
-  const [animationType, setAnimationType] = useState<AnimType | null>(null);
-  const [isGeneratingGif, setIsGeneratingGif] = useState(false);
+/** 文字色・背景色のプリセットパレット */
+const COLOR_PRESETS = [
+	"#000000",
+	"#ffffff",
+	"#ef4444",
+	"#f97316",
+	"#eab308",
+	"#22c55e",
+	"#0891b2",
+	"#3b82f6",
+	"#8b5cf6",
+	"#ec4899",
+];
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animFrameRef = useRef<number | null>(null);
+/** 透明背景を示す市松模様 */
+const CHECKER_STYLE: React.CSSProperties = {
+	backgroundImage:
+		"linear-gradient(45deg, #d1d5db 25%, transparent 25%, transparent 75%, #d1d5db 75%), linear-gradient(45deg, #d1d5db 25%, transparent 25%, transparent 75%, #d1d5db 75%)",
+	backgroundSize: "16px 16px",
+	backgroundPosition: "0 0, 8px 8px",
+	backgroundColor: "#f9fafb",
+};
 
-  const charCount = text.replace(/\n/g, "").length;
-  const lineCount = text.split("\n").length;
+const CHECKER_SMALL_STYLE: React.CSSProperties = {
+	...CHECKER_STYLE,
+	backgroundSize: "8px 8px",
+	backgroundPosition: "0 0, 4px 4px",
+};
 
-  const trimToLimit = useCallback((val: string): string => {
-    const { lines } = val
-      .split("\n")
-      .slice(0, 2)
-      .reduce<{ lines: string[]; total: number }>(
-        ({ lines, total }, l) => {
-          const remaining = 10 - total;
-          if (remaining <= 0) return { lines, total };
-          const capped = l.slice(0, Math.min(5, remaining));
-          return capped
-            ? { lines: [...lines, capped], total: total + capped.length }
-            : { lines, total };
-        },
-        { lines: [], total: 0 }
-      );
-    return lines.join("\n");
-  }, []);
+const TEXT_SHORTCUTS: ShortcutItem[] = [
+	{ keys: ["⌘/Ctrl", "S"], description: "保存ダイアログを開く" },
+	{ keys: ["⌘/Ctrl", "Enter"], description: "ダウンロード" },
+	{ keys: ["?"], description: "ショートカット一覧を表示" },
+];
 
-  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    if (isComposing) { setText(val); return; }
-    const lines = val.split("\n");
-    if (lines.length > 2) return;
-    if (lines.some((l) => l.length > 5)) return;
-    if (val.replace(/\n/g, "").length > 10) return;
-    setText(val);
-  };
+/** セクション見出し */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+	return (
+		<h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+			{children}
+		</h3>
+	);
+}
 
-  const handleCompositionStart = () => setIsComposing(true);
+/** 色スウォッチ（パレット + カスタム + 任意で透明チップ） */
+function ColorPicker({
+	value,
+	onChange,
+	allowTransparent = false,
+	label,
+}: {
+	value: string;
+	onChange: (color: string) => void;
+	allowTransparent?: boolean;
+	label: string;
+}) {
+	return (
+		<div className="flex flex-wrap items-center gap-1.5">
+			{allowTransparent && (
+				<button
+					type="button"
+					onClick={() => onChange("")}
+					aria-label="透明にする"
+					aria-pressed={value === ""}
+					title="透明"
+					className={cn(
+						"h-8 w-8 rounded-md border-2 transition",
+						value === ""
+							? "border-primary ring-2 ring-primary/30"
+							: "border-border hover:border-muted-foreground/60",
+					)}
+					style={CHECKER_SMALL_STYLE}
+				/>
+			)}
+			{COLOR_PRESETS.map((color) => (
+				<button
+					key={color}
+					type="button"
+					onClick={() => onChange(color)}
+					aria-label={`${label}を ${color} にする`}
+					aria-pressed={value === color}
+					className={cn(
+						"h-8 w-8 rounded-md border-2 transition",
+						value === color
+							? "border-primary ring-2 ring-primary/30 scale-110"
+							: "border-border hover:border-muted-foreground/60",
+					)}
+					style={{ backgroundColor: color }}
+				/>
+			))}
+			<label
+				className="relative h-8 w-8 cursor-pointer overflow-hidden rounded-md border-2 border-dashed border-border hover:border-muted-foreground/60 transition"
+				title="カスタムカラー"
+			>
+				<span
+					className="absolute inset-0"
+					style={{
+						background:
+							"conic-gradient(#ef4444, #eab308, #22c55e, #3b82f6, #8b5cf6, #ef4444)",
+					}}
+				/>
+				<input
+					type="color"
+					value={value || "#ffffff"}
+					onChange={(e) => onChange(e.target.value)}
+					aria-label={`${label}をカスタムカラーで選択`}
+					className="absolute inset-0 opacity-0 cursor-pointer"
+				/>
+			</label>
+		</div>
+	);
+}
 
-  const handleCompositionEnd = (e: React.CompositionEvent<HTMLTextAreaElement>) => {
-    setIsComposing(false);
-    const { value } = e.target as HTMLTextAreaElement;
-    setTimeout(() => setText(trimToLimit(value)), 0);
-  };
+export function TextEditor({ initialValues }: TextEditorProps = {}) {
+	const [text, setText] = useState(initialValues?.text ?? "よろ\nしく");
+	const [fontWeight, setFontWeight] = useState(
+		initialValues?.fontWeight ?? "700",
+	);
+	const [fontFamily, setFontFamily] = useState(
+		initialValues?.fontFamily ?? "Noto Sans JP",
+	);
+	const [textAlign, setTextAlign] = useState<TextAlign>("center");
+	const [textColor, setTextColor] = useState(
+		initialValues?.textColor ?? "#000000",
+	);
+	const [backgroundColor, setBackgroundColor] = useState(
+		initialValues?.backgroundColor ?? "",
+	);
+	const [isComposing, setIsComposing] = useState(false);
+	const [animationType, setAnimationType] = useState<AnimType | null>(null);
+	const [isGeneratingGif, setIsGeneratingGif] = useState(false);
 
-  const drawContent = useCallback((
-    ctx: CanvasRenderingContext2D,
-    SIZE: number,
-    animParams: AnimParams = AP0,
-  ) => {
-    const frameConfig = FRAME_CONFIGS[mode];
-    ctx.fillStyle = backgroundColor || frameConfig.defaultCanvasBg;
-    ctx.fillRect(0, 0, SIZE, SIZE);
+	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const miniCanvasRef = useRef<HTMLCanvasElement>(null);
+	const animFrameRef = useRef<number | null>(null);
 
-    const trimmed = text.trim();
-    if (!trimmed) return;
+	const charCount = text.replace(/\n/g, "").length;
+	const lineCount = text.split("\n").length;
+	const isTransparent = !backgroundColor;
+	// アニメーション選択時は GIF、未選択時は PNG で書き出す
+	const outputFormat: "png" | "gif" = animationType ? "gif" : "png";
 
-    const lines = trimmed
-      .split("\n")
-      .slice(0, 2)
-      .map((l) => l.slice(0, 5))
-      .filter((l) => l.length > 0);
-    if (lines.length === 0) return;
+	const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+		const val = e.target.value;
+		// IME 変換中は確定まで制限しない（確定時に trim する）
+		setText(isComposing ? val : trimToLimit(val));
+	};
 
-    const PADDING   = 4 * RENDER_SCALE;
-    const CONTENT_W = SIZE - PADDING * 2;
-    const CONTENT_H = SIZE - PADDING * 2;
-    const SAFETY    = 0.90;
+	const handleCompositionStart = () => setIsComposing(true);
 
-    ctx.save();
+	const handleCompositionEnd = (
+		e: React.CompositionEvent<HTMLTextAreaElement>,
+	) => {
+		setIsComposing(false);
+		const { value } = e.target as HTMLTextAreaElement;
+		setTimeout(() => setText(trimToLimit(value)), 0);
+	};
 
-    if (animParams.clipReveal < 1) {
-      ctx.beginPath();
-      ctx.rect(0, 0, SIZE * animParams.clipReveal, SIZE);
-      ctx.clip();
-    }
+	const drawContent = useCallback(
+		(
+			ctx: CanvasRenderingContext2D,
+			SIZE: number,
+			animParams: AnimParams = AP0,
+		) => {
+			ctx.clearRect(0, 0, SIZE, SIZE);
+			if (backgroundColor) {
+				ctx.fillStyle = backgroundColor;
+				ctx.fillRect(0, 0, SIZE, SIZE);
+			}
 
-    if (animParams.scale !== 1 || animParams.rotate !== 0) {
-      ctx.translate(SIZE / 2, SIZE / 2);
-      if (animParams.rotate !== 0) ctx.rotate(animParams.rotate * Math.PI / 180);
-      if (animParams.scale  !== 1) ctx.scale(animParams.scale, animParams.scale);
-      ctx.translate(-SIZE / 2, -SIZE / 2);
-    }
+			const trimmed = text.trim();
+			if (!trimmed) return;
 
-    if (animParams.offsetX !== 0 || animParams.offsetY !== 0) {
-      ctx.translate(animParams.offsetX, animParams.offsetY);
-    }
+			const lines = trimmed
+				.split("\n")
+				.slice(0, 2)
+				.map((l) => l.slice(0, 5))
+				.filter((l) => l.length > 0);
+			if (lines.length === 0) return;
 
-    ctx.globalAlpha = animParams.alpha;
-    if (animParams.hueShift  !== 0) ctx.filter = `hue-rotate(${animParams.hueShift}deg)`;
-    if (animParams.shadowBlur > 0) {
-      ctx.shadowBlur  = animParams.shadowBlur;
-      ctx.shadowColor = animParams.shadowColor || textColor;
-    }
+			const PADDING = 4 * RENDER_SCALE;
+			const CONTENT_W = SIZE - PADDING * 2;
+			const CONTENT_H = SIZE - PADDING * 2;
+			const SAFETY = 0.9;
 
-    ctx.font         = `${fontWeight} 100px "${fontFamily}", sans-serif`;
-    ctx.textBaseline = "alphabetic";
-    ctx.fillStyle    = textColor;
+			ctx.save();
 
-    // measureText を一度だけ呼んでキャッシュ
-    const allMetrics = lines.map((l) => ctx.measureText(l));
-    const maxNatW    = Math.max(...allMetrics.map((m) => m.width || 1));
-    const numLines   = lines.length;
-    const slotH      = CONTENT_H / numLines;
+			if (animParams.clipReveal < 1) {
+				ctx.beginPath();
+				ctx.rect(0, 0, SIZE * animParams.clipReveal, SIZE);
+				ctx.clip();
+			}
 
-    for (const [i, line] of lines.entries()) {
-      const m    = allMetrics[i];
-      const natW = m.width || 1;
-      const asc  = m.actualBoundingBoxAscent  ?? 90;
-      const des  = m.actualBoundingBoxDescent ?? 15;
+			if (animParams.scale !== 1 || animParams.rotate !== 0) {
+				ctx.translate(SIZE / 2, SIZE / 2);
+				if (animParams.rotate !== 0)
+					ctx.rotate((animParams.rotate * Math.PI) / 180);
+				if (animParams.scale !== 1)
+					ctx.scale(animParams.scale, animParams.scale);
+				ctx.translate(-SIZE / 2, -SIZE / 2);
+			}
 
-      const scaleX = textAlign === "center" ? CONTENT_W / natW : CONTENT_W / maxNatW;
-      const scaleY = (slotH / (asc + des)) * SAFETY;
-      const drawY  = PADDING + slotH * i + slotH / 2 + (asc - des) * scaleY / 2;
-      const drawX  =
-        textAlign === "left"  ? PADDING :
-        textAlign === "right" ? PADDING + CONTENT_W :
-                                PADDING + CONTENT_W / 2;
+			if (animParams.offsetX !== 0 || animParams.offsetY !== 0) {
+				ctx.translate(animParams.offsetX, animParams.offsetY);
+			}
 
-      ctx.save();
-      ctx.translate(drawX, drawY);
-      ctx.scale(scaleX, scaleY);
-      ctx.textAlign = textAlign;
-      ctx.fillText(line, 0, 0);
-      ctx.restore();
-    }
+			ctx.globalAlpha = animParams.alpha;
+			if (animParams.hueShift !== 0)
+				ctx.filter = `hue-rotate(${animParams.hueShift}deg)`;
+			if (animParams.shadowBlur > 0) {
+				ctx.shadowBlur = animParams.shadowBlur;
+				ctx.shadowColor = animParams.shadowColor || textColor;
+			}
 
-    ctx.restore();
-  }, [text, fontWeight, fontFamily, textAlign, textColor, backgroundColor, mode]);
+			ctx.font = `${fontWeight} 100px "${fontFamily}", sans-serif`;
+			ctx.textBaseline = "alphabetic";
+			ctx.fillStyle = textColor;
 
-  const drawCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const SIZE = EXPORT_SIZE * RENDER_SCALE;
-    canvas.width  = SIZE;
-    canvas.height = SIZE;
-    drawContent(ctx, SIZE);
-  }, [drawContent]);
+			// measureText を一度だけ呼んでキャッシュ
+			const allMetrics = lines.map((l) => ctx.measureText(l));
+			const maxNatW = Math.max(...allMetrics.map((m) => m.width || 1));
+			const numLines = lines.length;
+			const slotH = CONTENT_H / numLines;
 
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const weights = ["400", "700", "900"];
-    Promise.allSettled(
-      weights.map((w) => document.fonts.load(`${w} 64px "${fontFamily}"`))
-    ).then(() => drawCanvas());
-    const t = setTimeout(drawCanvas, 400);
-    return () => clearTimeout(t);
-  }, [drawCanvas, fontFamily]);
+			for (const [i, line] of lines.entries()) {
+				const m = allMetrics[i];
+				const natW = m.width || 1;
+				const asc = m.actualBoundingBoxAscent ?? 90;
+				const des = m.actualBoundingBoxDescent ?? 15;
 
-  useEffect(() => {
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-      animFrameRef.current = null;
-    }
-    if (!animationType) { drawCanvas(); return; }
+				const scaleX =
+					textAlign === "center" ? CONTENT_W / natW : CONTENT_W / maxNatW;
+				const scaleY = (slotH / (asc + des)) * SAFETY;
+				const drawY =
+					PADDING + slotH * i + slotH / 2 + ((asc - des) * scaleY) / 2;
+				const drawX =
+					textAlign === "left"
+						? PADDING
+						: textAlign === "right"
+							? PADDING + CONTENT_W
+							: PADDING + CONTENT_W / 2;
 
-    const config    = ANIM_CONFIGS[animationType];
-    const SIZE      = EXPORT_SIZE * RENDER_SCALE;
-    const startTime = performance.now();
-    const totalMs   = config.frames * config.delay;
+				ctx.save();
+				ctx.translate(drawX, drawY);
+				ctx.scale(scaleX, scaleY);
+				ctx.textAlign = textAlign;
+				ctx.fillText(line, 0, 0);
+				ctx.restore();
+			}
 
-    const loop = (now: number) => {
-      const frameIdx = Math.floor(((now - startTime) % totalMs) / config.delay);
-      const canvas   = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      canvas.width  = SIZE;
-      canvas.height = SIZE;
-      drawContent(ctx, SIZE, config.getParams(frameIdx, config.frames, SIZE));
-      animFrameRef.current = requestAnimationFrame(loop);
-    };
-    animFrameRef.current = requestAnimationFrame(loop);
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    };
-  }, [animationType, drawContent, drawCanvas]);
+			ctx.restore();
+		},
+		[text, fontWeight, fontFamily, textAlign, textColor, backgroundColor],
+	);
 
-  const buildGifDataUrl = useCallback(async (): Promise<string | null> => {
-    if (!animationType) return null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { GIFEncoder, quantize, applyPalette } = await import("gifenc" as any);
-    const config     = ANIM_CONFIGS[animationType];
-    const gif        = GIFEncoder();
-    const renderSize = EXPORT_SIZE * RENDER_SCALE;
+	// アニメーションループが最新の描画関数を参照するための ref
+	// （drawContent は編集のたびに変わるが、ループは再起動させない）
+	const drawContentRef = useRef(drawContent);
+	useEffect(() => {
+		drawContentRef.current = drawContent;
+	}, [drawContent]);
 
-    const renderCanvas = document.createElement("canvas");
-    renderCanvas.width = renderCanvas.height = renderSize;
-    const renderCtx = renderCanvas.getContext("2d");
-    if (!renderCtx) return null;
+	/** メインプレビューを 128px 実寸プレビューへ転写 */
+	const blitMini = useCallback(() => {
+		const src = canvasRef.current;
+		const dst = miniCanvasRef.current;
+		if (!src || !dst) return;
+		const ctx = dst.getContext("2d");
+		if (!ctx) return;
+		dst.width = dst.height = EXPORT_SIZE;
+		ctx.imageSmoothingEnabled = true;
+		ctx.imageSmoothingQuality = "high";
+		ctx.clearRect(0, 0, EXPORT_SIZE, EXPORT_SIZE);
+		ctx.drawImage(src, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
+	}, []);
 
-    const exportCanvas = document.createElement("canvas");
-    exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
-    const exportCtx = exportCanvas.getContext("2d");
-    if (!exportCtx) return null;
-    exportCtx.imageSmoothingEnabled = true;
-    exportCtx.imageSmoothingQuality = "high";
+	const drawCanvas = useCallback(() => {
+		const canvas = canvasRef.current;
+		if (!canvas) return;
+		const ctx = canvas.getContext("2d");
+		if (!ctx) return;
+		const SIZE = EXPORT_SIZE * RENDER_SCALE;
+		canvas.width = SIZE;
+		canvas.height = SIZE;
+		drawContent(ctx, SIZE);
+		blitMini();
+	}, [drawContent, blitMini]);
 
-    for (let f = 0; f < config.frames; f++) {
-      renderCanvas.width = renderCanvas.height = renderSize;
-      drawContent(renderCtx, renderSize, config.getParams(f, config.frames, renderSize));
+	useEffect(() => {
+		if (typeof document === "undefined") return;
+		const weights = ["400", "700", "900"];
+		Promise.allSettled(
+			weights.map((w) => document.fonts.load(`${w} 64px "${fontFamily}"`)),
+		).then(() => drawCanvas());
+		const t = setTimeout(drawCanvas, 400);
+		return () => clearTimeout(t);
+	}, [drawCanvas, fontFamily]);
 
-      exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
-      exportCtx.drawImage(renderCanvas, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
+	useEffect(() => {
+		if (animFrameRef.current) {
+			cancelAnimationFrame(animFrameRef.current);
+			animFrameRef.current = null;
+		}
+		if (!animationType) return; // 静止画は上の effect が描画する
 
-      const imgData = exportCtx.getImageData(0, 0, EXPORT_SIZE, EXPORT_SIZE);
-      const palette = quantize(imgData.data, 256);
-      const index   = applyPalette(imgData.data, palette);
-      gif.writeFrame(index, EXPORT_SIZE, EXPORT_SIZE, { palette, delay: config.delay });
-    }
+		const config = ANIM_CONFIGS[animationType];
+		const SIZE = EXPORT_SIZE * RENDER_SCALE;
+		const startTime = performance.now();
+		const totalMs = config.frames * config.delay;
 
-    gif.finish();
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload  = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(new Blob([gif.bytes()], { type: "image/gif" }));
-    });
-  }, [animationType, drawContent]);
+		const loop = (now: number) => {
+			const frameIdx = Math.floor(((now - startTime) % totalMs) / config.delay);
+			const canvas = canvasRef.current;
+			if (!canvas) return;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return;
+			canvas.width = SIZE;
+			canvas.height = SIZE;
+			drawContentRef.current(
+				ctx,
+				SIZE,
+				config.getParams(frameIdx, config.frames, SIZE),
+			);
+			blitMini();
+			animFrameRef.current = requestAnimationFrame(loop);
+		};
+		animFrameRef.current = requestAnimationFrame(loop);
+		return () => {
+			if (animFrameRef.current) {
+				cancelAnimationFrame(animFrameRef.current);
+				animFrameRef.current = null;
+			}
+		};
+	}, [animationType, blitMini]);
 
-  const downloadGif = async () => {
-    if (!animationType) return;
-    setIsGeneratingGif(true);
-    try {
-      const dataUrl = await buildGifDataUrl();
-      if (!dataUrl) return;
-      const a   = document.createElement("a");
-      a.href     = dataUrl;
-      a.download = `emoji_${Date.now()}.gif`;
-      a.click();
-    } finally {
-      setIsGeneratingGif(false);
-    }
-  };
+	const buildGifDataUrl = useCallback(async (): Promise<string | null> => {
+		if (!animationType) return null;
+		const config = ANIM_CONFIGS[animationType];
+		const renderSize = EXPORT_SIZE * RENDER_SCALE;
 
-  const getImageData = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return null;
-    const offscreen = document.createElement("canvas");
-    offscreen.width = offscreen.height = EXPORT_SIZE;
-    const ctx = offscreen.getContext("2d");
-    if (!ctx) return null;
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(canvas, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
-    return offscreen.toDataURL("image/png");
-  }, []);
+		const renderCanvas = document.createElement("canvas");
+		renderCanvas.width = renderCanvas.height = renderSize;
+		const renderCtx = renderCanvas.getContext("2d");
+		if (!renderCtx) return null;
 
-  const downloadImage = () => {
-    const data = getImageData();
-    if (!data) return;
-    const link      = document.createElement("a");
-    link.download   = `emoji_${Date.now()}.png`;
-    link.href       = data;
-    link.click();
-  };
+		const exportCanvas = document.createElement("canvas");
+		exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
+		const exportCtx = exportCanvas.getContext("2d");
+		if (!exportCtx) return null;
+		exportCtx.imageSmoothingEnabled = true;
+		exportCtx.imageSmoothingQuality = "high";
 
-  const { data: session } = authClient.useSession();
-  const createEmoji = api.emoji.create.useMutation();
-  const [saveName, setSaveName] = useState("");
-  const [savePublic, setSavePublic] = useState(false);
-  const [showSaveForm, setShowSaveForm] = useState(false);
+		const gifFrames: GifFrame[] = [];
+		for (let f = 0; f < config.frames; f++) {
+			renderCanvas.width = renderCanvas.height = renderSize;
+			drawContent(
+				renderCtx,
+				renderSize,
+				config.getParams(f, config.frames, renderSize),
+			);
 
-  const handleSave = () => {
-    if (!session?.user) {
-      authClient.signIn.social({ provider: "google" });
-      return;
-    }
-    setShowSaveForm(true);
-  };
+			exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
+			exportCtx.drawImage(renderCanvas, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
 
-  const handleSaveSubmit = async () => {
-    if (!saveName.trim()) return;
-    let imageData: string | null;
-    if (outputFormat === "gif" && animationType) {
-      setIsGeneratingGif(true);
-      try {
-        imageData = await buildGifDataUrl();
-      } finally {
-        setIsGeneratingGif(false);
-      }
-    } else {
-      imageData = getImageData();
-    }
-    if (!imageData) return;
-    createEmoji.mutate(
-      {
-        name:            saveName.trim(),
-        editorType:      "TEXT",
-        imageData,
-        isPublic:        savePublic,
-        text,
-        fontSize:        Number.parseInt(fontWeight, 10),
-        fontFamily,
-        textColor,
-        backgroundColor: backgroundColor || undefined,
-      },
-      {
-        onSuccess: () => {
-          setShowSaveForm(false);
-          setSaveName("");
-          window.location.href = "/my-emojis";
-        },
-      }
-    );
-  };
+			gifFrames.push({
+				imageData: exportCtx.getImageData(0, 0, EXPORT_SIZE, EXPORT_SIZE),
+				delay: config.delay,
+			});
+		}
 
-  const frameConfig  = FRAME_CONFIGS[mode];
-  const cardStyle    = CARD_STYLES[mode];
-  const labelStyle   = LABEL_STYLES[mode];
-  const inputStyle   = INPUT_STYLES[mode];
-  const hintStyle    = HINT_STYLES[mode];
-  const uiFontStyle  = UI_FONT_STYLES[mode];
+		return encodeGifToDataUrl(gifFrames, EXPORT_SIZE, EXPORT_SIZE, {
+			transparent: isTransparent,
+		});
+	}, [animationType, drawContent, isTransparent]);
 
-  return (
-    <div className={cn("grid gap-4 sm:gap-6 lg:grid-cols-3", uiFontStyle)}>
-      {/* 設定パネル */}
-      <div className="lg:col-span-1">
-        <Card className={cardStyle}>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg">設定</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+	const getImageData = useCallback(() => {
+		const offscreen = document.createElement("canvas");
+		offscreen.width = offscreen.height = EXPORT_SIZE * RENDER_SCALE;
+		const renderCtx = offscreen.getContext("2d");
+		if (!renderCtx) return null;
+		// アニメーション中でも静止状態で書き出すため、プレビューではなく直接描画する
+		drawContent(renderCtx, EXPORT_SIZE * RENDER_SCALE);
 
-            {/* 文字入力 */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label className={labelStyle}>テキスト</Label>
-                <span className={cn(
-                  "text-xs tabular-nums",
-                  charCount >= 10 ? "text-red-400 font-semibold" : hintStyle
-                )}>
-                  {charCount}/10文字 · {lineCount}/2行 (各行最大5文字)
-                </span>
-              </div>
-              <textarea
-                value={text}
-                onChange={handleTextChange}
-                onCompositionStart={handleCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-                placeholder="テキストを入力"
-                rows={2}
-                className={cn(
-                  "w-full resize-none rounded-md border px-3 py-2 text-base leading-relaxed",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  "placeholder:text-muted-foreground",
-                  inputStyle
-                )}
-              />
-            </div>
+		const exportCanvas = document.createElement("canvas");
+		exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
+		const ctx = exportCanvas.getContext("2d");
+		if (!ctx) return null;
+		ctx.imageSmoothingEnabled = true;
+		ctx.imageSmoothingQuality = "high";
+		ctx.drawImage(offscreen, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
+		return exportCanvas.toDataURL("image/png");
+	}, [drawContent]);
 
-            <div className="space-y-1.5">
-              <Label className={labelStyle}>太さ</Label>
-              <Select value={fontWeight} onValueChange={setFontWeight}>
-                <SelectTrigger className={inputStyle}><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {FONT_WEIGHTS.map((fw) => (
-                    <SelectItem key={fw.value} value={fw.value}>{fw.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+	const handleDownload = async () => {
+		if (animationType) {
+			setIsGeneratingGif(true);
+			try {
+				const dataUrl = await buildGifDataUrl();
+				if (!dataUrl) return;
+				downloadDataUrl(dataUrl, `emoji_${Date.now()}.gif`);
+			} finally {
+				setIsGeneratingGif(false);
+			}
+		} else {
+			const data = getImageData();
+			if (!data) return;
+			downloadDataUrl(data, `emoji_${Date.now()}.png`);
+		}
+	};
 
-            <div className="space-y-1.5">
-              <Label className={labelStyle}>フォント</Label>
-              <Select value={fontFamily} onValueChange={setFontFamily}>
-                <SelectTrigger className={inputStyle}><SelectValue /></SelectTrigger>
-                <SelectContent className="max-h-[220px]">
-                  {FONTS.map((font) => (
-                    <SelectItem key={font.value} value={font.value}>{font.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+	const {
+		saveName,
+		setSaveName,
+		savePublic,
+		setSavePublic,
+		showSaveForm,
+		setShowSaveForm,
+		showLoginDialog,
+		setShowLoginDialog,
+		openSaveForm,
+		loginAndContinue,
+		submitSave,
+		isSaving,
+	} = useSaveEmoji({
+		collectDraft: () => ({
+			type: "TEXT",
+			text,
+			fontWeight,
+			fontFamily,
+			textColor,
+			backgroundColor,
+			savedAt: Date.now(),
+		}),
+	});
 
-            <div className="space-y-1.5">
-              <Label className={labelStyle}>揃え</Label>
-              <Select value={textAlign} onValueChange={(v) => setTextAlign(v as TextAlign)}>
-                <SelectTrigger className={inputStyle}><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {TEXT_ALIGNS.map((a) => (
-                    <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+	// ログイン往復後の下書き復元（編集モードでは提案しない）
+	const [availableDraft, setAvailableDraft] = useState<TextEditorDraft | null>(
+		null,
+	);
+	useEffect(() => {
+		if (initialValues) return;
+		const draft = loadDraft();
+		if (draft?.type === "TEXT") setAvailableDraft(draft);
+	}, [initialValues]);
 
-            <div className="space-y-1.5">
-              <Label className={labelStyle}>文字色</Label>
-              <div className="flex gap-2 items-center">
-                <input
-                  type="color"
-                  value={textColor}
-                  onChange={(e) => setTextColor(e.target.value)}
-                  className="h-10 w-12 cursor-pointer rounded border border-input flex-shrink-0"
-                />
-                <input
-                  type="text"
-                  value={textColor}
-                  onChange={(e) => setTextColor(e.target.value)}
-                  className={cn("flex-1 rounded-md border px-3 py-2 text-sm", inputStyle)}
-                  placeholder="#000000"
-                />
-              </div>
-            </div>
+	const restoreDraft = () => {
+		if (!availableDraft) return;
+		setText(availableDraft.text);
+		setFontWeight(availableDraft.fontWeight);
+		setFontFamily(availableDraft.fontFamily);
+		setTextColor(availableDraft.textColor);
+		setBackgroundColor(availableDraft.backgroundColor);
+		clearDraft();
+		setAvailableDraft(null);
+		toast.success("編集内容を復元しました");
+	};
 
-            <div className="space-y-1.5">
-              <Label className={labelStyle}>背景色</Label>
-              <div className="flex gap-2 items-center">
-                <input
-                  type="color"
-                  value={backgroundColor || "#ffffff"}
-                  onChange={(e) => setBackgroundColor(e.target.value)}
-                  className="h-10 w-12 cursor-pointer rounded border border-input flex-shrink-0"
-                />
-                <input
-                  type="text"
-                  value={backgroundColor}
-                  onChange={(e) => setBackgroundColor(e.target.value)}
-                  className={cn("flex-1 rounded-md border px-3 py-2 text-sm", inputStyle)}
-                  placeholder="透明"
-                />
-                {backgroundColor && (
-                  <Button
-                    variant="ghost" size="sm"
-                    onClick={() => setBackgroundColor("")}
-                    className="flex-shrink-0 text-xs"
-                  >
-                    クリア
-                  </Button>
-                )}
-              </div>
-            </div>
+	const discardDraft = () => {
+		clearDraft();
+		setAvailableDraft(null);
+	};
 
-            {/* Format */}
-            <div className="space-y-1.5">
-              <Label className={labelStyle}>形式</Label>
-              <div className="flex gap-2">
-                {(["png", "gif"] as const).map((fmt) => (
-                  <button
-                    key={fmt}
-                    type="button"
-                    onClick={() => {
-                      setOutputFormat(fmt);
-                      if (fmt === "png") setAnimationType(null);
-                    }}
-                    className={cn(
-                      "flex-1 rounded-md border px-3 py-2 text-sm font-medium transition",
-                      outputFormat === fmt
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background border-input hover:border-gray-400"
-                    )}
-                  >
-                    {fmt.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
+	// キーボードショートカット（最新のハンドラを ref 経由で参照）
+	const shortcutActionsRef = useRef({
+		save: () => {},
+		download: () => {},
+	});
+	shortcutActionsRef.current = { save: openSaveForm, download: handleDownload };
 
-            {/* Animation (GIF only) */}
-            {outputFormat === "gif" && (
-              <div className="space-y-1.5">
-                <Label className={labelStyle}>アニメーション</Label>
-                <Select
-                  value={animationType ?? ""}
-                  onValueChange={(v) => setAnimationType(v ? (v as AnimType) : null)}
-                >
-                  <SelectTrigger className={inputStyle}>
-                    <SelectValue placeholder="— アニメーションを選択 —" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(Object.entries(ANIM_CONFIGS) as [AnimType, AnimConfig][]).map(([key, cfg]) => (
-                      <SelectItem key={key} value={key}>
-                        <span className="mr-2">{cfg.icon}</span>
-                        {cfg.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+	useEffect(() => {
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (!(e.metaKey || e.ctrlKey)) return;
+			if (e.key.toLowerCase() === "s") {
+				e.preventDefault();
+				shortcutActionsRef.current.save();
+			} else if (e.key === "Enter") {
+				e.preventDefault();
+				shortcutActionsRef.current.download();
+			}
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, []);
 
-            {outputFormat === "png" ? (
-              <Button onClick={downloadImage} className="w-full" size="lg">
-                <Download className="mr-2 h-4 w-4" />
-                PNG ダウンロード
-              </Button>
-            ) : (
-              <Button
-                onClick={downloadGif}
-                className="w-full"
-                size="lg"
-                disabled={!animationType || isGeneratingGif}
-              >
-                <Download className="mr-2 h-4 w-4" />
-                {isGeneratingGif ? "生成中..." : animationType ? "GIF ダウンロード" : "アニメーションを選択"}
-              </Button>
-            )}
+	const handleSaveSubmit = async () => {
+		let imageData: string | null;
+		if (animationType) {
+			setIsGeneratingGif(true);
+			try {
+				imageData = await buildGifDataUrl();
+			} finally {
+				setIsGeneratingGif(false);
+			}
+		} else {
+			imageData = getImageData();
+		}
+		if (!imageData) return;
+		submitSave({
+			editorType: "TEXT",
+			imageData,
+			text,
+			fontWeight: Number.parseInt(fontWeight, 10),
+			fontFamily,
+			textColor,
+			backgroundColor: backgroundColor || undefined,
+		});
+	};
 
-            <Button onClick={handleSave} variant="outline" className="w-full" size="lg">
-              <Save className="mr-2 h-4 w-4" />
-              マイ絵文字に保存
-            </Button>
+	return (
+		<div>
+			{availableDraft && (
+				<div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3">
+					<p className="text-sm">
+						ログイン前の編集内容があります。復元しますか？
+					</p>
+					<div className="flex gap-2">
+						<Button size="sm" onClick={restoreDraft}>
+							復元する
+						</Button>
+						<Button size="sm" variant="ghost" onClick={discardDraft}>
+							破棄
+						</Button>
+					</div>
+				</div>
+			)}
 
-            {showSaveForm && (
-              <div className="space-y-3 p-3 rounded-lg border bg-muted/50">
-                <div className="space-y-1.5">
-                  <Label className={labelStyle}>名前</Label>
-                  <input
-                    type="text"
-                    value={saveName}
-                    onChange={(e) => setSaveName(e.target.value)}
-                    placeholder="emoji_name"
-                    className={cn("w-full rounded-md border px-3 py-2 text-sm", inputStyle)}
-                    maxLength={50}
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label className={labelStyle}>公開</Label>
-                  <Switch checked={savePublic} onCheckedChange={setSavePublic} />
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    onClick={handleSaveSubmit}
-                    disabled={!saveName.trim() || createEmoji.isPending}
-                    className="flex-1"
-                  >
-                    {createEmoji.isPending ? "保存中..." : "保存"}
-                  </Button>
-                  <Button variant="ghost" onClick={() => setShowSaveForm(false)}>キャンセル</Button>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+			<div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+				{/* ==== プレビュー（左・sticky） ==== */}
+				<div className="lg:sticky lg:top-20 self-start">
+					<div className="rounded-2xl border bg-card p-6 flex flex-col items-center gap-5">
+						<div
+							className="rounded-xl border overflow-hidden"
+							style={isTransparent ? CHECKER_STYLE : undefined}
+						>
+							<canvas
+								ref={canvasRef}
+								role="img"
+								aria-label="絵文字プレビュー"
+								className="block w-64 h-64 sm:w-72 sm:h-72"
+							/>
+						</div>
 
-      {/* プレビュー */}
-      <div className="lg:col-span-2">
-        <Card className={cardStyle}>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg">プレビュー</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className={cn(
-              "flex flex-col items-center justify-center gap-4 p-8 sm:p-12 min-h-64",
-              frameConfig.areaClass
-            )}>
-              <div className={frameConfig.wrapperClass} style={frameConfig.wrapperStyle}>
-                {frameConfig.innerClass ? (
-                  <div className={frameConfig.innerClass}>
-                    <canvas ref={canvasRef} className="block w-48 h-48 sm:w-56 sm:h-56" style={{ imageRendering: "auto" }} />
-                  </div>
-                ) : (
-                  <canvas ref={canvasRef} className="block w-48 h-48 sm:w-56 sm:h-56" style={{ imageRendering: "auto" }} />
-                )}
-              </div>
-              {frameConfig.decoration}
-              <p className={cn("text-xs", hintStyle)}>128×128px（Slack標準サイズ）</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
+						{/* 実寸プレビュー */}
+						<div className="flex items-center gap-3">
+							<div
+								className="rounded-md border overflow-hidden"
+								style={isTransparent ? CHECKER_SMALL_STYLE : undefined}
+							>
+								<canvas
+									ref={miniCanvasRef}
+									role="img"
+									aria-label="実寸プレビュー（128px）"
+									className="block w-[64px] h-[64px]"
+								/>
+							</div>
+							<div className="text-xs text-muted-foreground leading-relaxed">
+								Slack 上での見え方
+								<br />
+								128×128px で書き出し
+							</div>
+						</div>
+					</div>
+				</div>
+
+				{/* ==== 設定（右） ==== */}
+				<div className="space-y-7 pb-4">
+					{/* テキスト */}
+					<section className="space-y-2">
+						<div className="flex items-center justify-between">
+							<SectionLabel>テキスト</SectionLabel>
+							<span
+								className={cn(
+									"text-xs tabular-nums",
+									charCount >= 10
+										? "text-red-400 font-semibold"
+										: "text-muted-foreground",
+								)}
+							>
+								{charCount}/10文字 · {lineCount}/2行
+							</span>
+						</div>
+						<textarea
+							value={text}
+							onChange={handleTextChange}
+							onCompositionStart={handleCompositionStart}
+							onCompositionEnd={handleCompositionEnd}
+							placeholder={"テキストを入力\n（2行・各行5文字まで）"}
+							rows={2}
+							aria-label="絵文字のテキスト"
+							className={cn(
+								"w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-lg leading-relaxed",
+								"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+								"placeholder:text-muted-foreground placeholder:text-sm",
+							)}
+						/>
+					</section>
+
+					{/* フォント */}
+					<section className="space-y-2.5">
+						<SectionLabel>フォント</SectionLabel>
+						<div className="grid grid-cols-2 min-[480px]:grid-cols-3 xl:grid-cols-4 gap-2">
+							{FONTS.map((font) => (
+								<button
+									key={font.value}
+									type="button"
+									onClick={() => setFontFamily(font.value)}
+									aria-pressed={fontFamily === font.value}
+									className={cn(
+										"flex flex-col items-center gap-0.5 rounded-lg border-2 px-2 py-2 transition",
+										fontFamily === font.value
+											? "border-primary bg-primary/5"
+											: "border-border hover:border-muted-foreground/50 hover:bg-muted/50",
+									)}
+								>
+									<span
+										className="text-xl leading-none"
+										style={{ fontFamily: `'${font.value}', sans-serif` }}
+									>
+										あア
+									</span>
+									<span className="text-[10px] text-muted-foreground truncate max-w-full">
+										{font.label}
+									</span>
+								</button>
+							))}
+						</div>
+
+						<div className="flex flex-wrap gap-x-6 gap-y-2 pt-1">
+							<div className="flex items-center gap-2">
+								<Label className="text-xs text-muted-foreground">太さ</Label>
+								<div className="flex rounded-lg border p-0.5">
+									{FONT_WEIGHTS.map((fw) => (
+										<button
+											key={fw.value}
+											type="button"
+											onClick={() => setFontWeight(fw.value)}
+											aria-pressed={fontWeight === fw.value}
+											className={cn(
+												"rounded-md px-3 py-1 text-xs font-medium transition",
+												fontWeight === fw.value
+													? "bg-primary text-primary-foreground"
+													: "text-muted-foreground hover:text-foreground",
+											)}
+										>
+											{fw.label}
+										</button>
+									))}
+								</div>
+							</div>
+							<div className="flex items-center gap-2">
+								<Label className="text-xs text-muted-foreground">揃え</Label>
+								<div className="flex rounded-lg border p-0.5">
+									{TEXT_ALIGNS.map((a) => (
+										<button
+											key={a.value}
+											type="button"
+											onClick={() => setTextAlign(a.value)}
+											aria-pressed={textAlign === a.value}
+											className={cn(
+												"rounded-md px-3 py-1 text-xs font-medium transition",
+												textAlign === a.value
+													? "bg-primary text-primary-foreground"
+													: "text-muted-foreground hover:text-foreground",
+											)}
+										>
+											{a.label.replace("揃え", "")}
+										</button>
+									))}
+								</div>
+							</div>
+						</div>
+					</section>
+
+					{/* カラー */}
+					<section className="space-y-3">
+						<SectionLabel>カラー</SectionLabel>
+						<div className="space-y-1.5">
+							<Label className="text-xs text-muted-foreground">文字色</Label>
+							<ColorPicker
+								value={textColor}
+								onChange={setTextColor}
+								label="文字色"
+							/>
+						</div>
+						<div className="space-y-1.5">
+							<Label className="text-xs text-muted-foreground">
+								背景色
+								{isTransparent && (
+									<span className="ml-2 text-muted-foreground/70">
+										（透明で書き出されます）
+									</span>
+								)}
+							</Label>
+							<ColorPicker
+								value={backgroundColor}
+								onChange={setBackgroundColor}
+								allowTransparent
+								label="背景色"
+							/>
+						</div>
+					</section>
+
+					{/* アニメーション */}
+					<section className="space-y-2.5">
+						<div className="flex items-center justify-between">
+							<SectionLabel>アニメーション</SectionLabel>
+							<span className="text-xs text-muted-foreground">
+								選ぶと GIF で書き出されます
+							</span>
+						</div>
+						<div className="grid grid-cols-3 min-[480px]:grid-cols-4 gap-1.5">
+							<button
+								type="button"
+								onClick={() => setAnimationType(null)}
+								aria-pressed={animationType === null}
+								className={cn(
+									"flex items-center justify-center gap-1 rounded-lg border-2 px-2 py-2 text-xs font-medium transition",
+									animationType === null
+										? "border-primary bg-primary/5"
+										: "border-border hover:border-muted-foreground/50 hover:bg-muted/50",
+								)}
+							>
+								なし
+							</button>
+							{(Object.entries(ANIM_CONFIGS) as [AnimType, AnimConfig][]).map(
+								([key, cfg]) => (
+									<button
+										key={key}
+										type="button"
+										onClick={() => setAnimationType(key)}
+										aria-pressed={animationType === key}
+										className={cn(
+											"flex items-center justify-center gap-1 rounded-lg border-2 px-2 py-2 text-xs font-medium transition",
+											animationType === key
+												? "border-primary bg-primary/5"
+												: "border-border hover:border-muted-foreground/50 hover:bg-muted/50",
+										)}
+									>
+										<span className="truncate">{cfg.label}</span>
+									</button>
+								),
+							)}
+						</div>
+					</section>
+				</div>
+			</div>
+
+			{/* ==== 操作バー（常時表示） ==== */}
+			<div className="sticky bottom-0 z-40 mt-6 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+				<div className="flex items-center justify-end gap-2">
+					<div className="mr-auto flex items-center gap-1.5">
+						<ShortcutHelp shortcuts={TEXT_SHORTCUTS} />
+						<span className="text-xs text-muted-foreground hidden sm:block">
+							{outputFormat === "gif"
+								? `GIF · ${animationType ? ANIM_CONFIGS[animationType].label : ""}`
+								: "PNG · 静止画"}
+						</span>
+					</div>
+					<Button
+						onClick={handleDownload}
+						size="lg"
+						disabled={isGeneratingGif}
+						className="flex-1 sm:flex-none"
+					>
+						<Download className="mr-2 h-4 w-4" />
+						{isGeneratingGif
+							? "生成中..."
+							: `${outputFormat.toUpperCase()} ダウンロード`}
+					</Button>
+					<Button
+						onClick={openSaveForm}
+						variant="outline"
+						size="lg"
+						className="flex-1 sm:flex-none"
+					>
+						<Save className="mr-2 h-4 w-4" />
+						保存
+					</Button>
+				</div>
+			</div>
+
+			{/* 保存ダイアログ */}
+			<Dialog open={showSaveForm} onOpenChange={setShowSaveForm}>
+				<DialogContent className="sm:max-w-md">
+					<DialogHeader>
+						<DialogTitle>マイ絵文字に保存</DialogTitle>
+					</DialogHeader>
+					<SaveEmojiForm
+						saveName={saveName}
+						onSaveNameChange={setSaveName}
+						savePublic={savePublic}
+						onSavePublicChange={setSavePublic}
+						onSubmit={handleSaveSubmit}
+						onCancel={() => setShowSaveForm(false)}
+						isSaving={isSaving}
+						busyLabel={isGeneratingGif ? "GIF生成中..." : undefined}
+					/>
+				</DialogContent>
+			</Dialog>
+
+			<LoginDialog
+				open={showLoginDialog}
+				onOpenChange={setShowLoginDialog}
+				onLogin={loginAndContinue}
+			/>
+		</div>
+	);
 }

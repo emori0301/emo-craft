@@ -73,8 +73,12 @@ docker compose up -d
 
 ```bash
 npm run db:generate
-npm run db:push
+npx prisma migrate deploy
 ```
+
+スキーマ変更は `prisma/migrations/` のマイグレーションで管理しています。
+開発中にスキーマを変更したら `npm run db:migrate`（`prisma migrate dev`）で新しいマイグレーションを作成してください。
+本番環境へは `npx prisma migrate deploy` で適用します（`db:push` は使わないこと）。
 
 ### 5. 開発サーバーの起動
 
@@ -99,7 +103,7 @@ npm run dev
 ## プロジェクト構造
 
 ```
-slack-emoji-generator/
+emoCraft/
 ├── app/                    # Next.js App Router
 │   ├── api/               # API Routes
 │   │   ├── auth/          # Better Auth routes

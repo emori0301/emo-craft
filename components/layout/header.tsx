@@ -35,12 +35,22 @@ export function Header() {
 	);
 
 	return (
-		<header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+		<header className="sticky top-0 z-50 w-full border-b bg-card/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/80">
 			<div className="container flex h-16 items-center justify-between px-4">
 				<Link
 					href="/"
-					className="flex items-center space-x-2 hover:opacity-80 transition-opacity"
+					className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
 				>
+					{/* ピクセル調のロゴマーク */}
+					<span
+						aria-hidden="true"
+						className="grid h-7 w-7 grid-cols-2 overflow-hidden rounded-lg rotate-3 shadow-sm"
+					>
+						<span className="bg-violet-500" />
+						<span className="bg-pink-400" />
+						<span className="bg-amber-400" />
+						<span className="bg-emerald-400" />
+					</span>
 					<span
 						className="text-xl font-bold text-foreground"
 						style={{ fontFamily: "'M PLUS Rounded 1c', sans-serif" }}

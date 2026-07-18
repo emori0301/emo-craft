@@ -138,6 +138,38 @@ export function plotTriangle(
 	];
 }
 
+/**
+ * 塗りつぶし（flood fill）。
+ * (row, col) と同色で連結しているセル群を返す。境界チェック済み。
+ */
+export function floodFill(
+	grid: string[][],
+	row: number,
+	col: number,
+	color: string,
+): Cell[] {
+	const size = grid.length;
+	if (row < 0 || row >= size || col < 0 || col >= size) return [];
+	const target = grid[row][col];
+	if (target === color) return [];
+	const cells: Cell[] = [];
+	const visited = new Set<number>();
+	const stack: Cell[] = [[row, col]];
+	while (stack.length > 0) {
+		const cell = stack.pop();
+		if (!cell) break;
+		const [r, c] = cell;
+		if (r < 0 || r >= size || c < 0 || c >= size) continue;
+		const key = r * size + c;
+		if (visited.has(key)) continue;
+		visited.add(key);
+		if (grid[r][c] !== target) continue;
+		cells.push([r, c]);
+		stack.push([r + 1, c], [r - 1, c], [r, c + 1], [r, c - 1]);
+	}
+	return cells;
+}
+
 /** size×size の白紙グリッドを作る */
 export function createEmptyGrid(size: number): string[][] {
 	return Array(size)

@@ -4,24 +4,27 @@ import { ANIM_CONFIGS, trimToLimit } from "./text-config";
 describe("trimToLimit", () => {
 	it("keeps text within limits unchanged", () => {
 		expect(trimToLimit("よろ\nしく")).toBe("よろ\nしく");
+		expect(trimToLimit("あ\nい\nう")).toBe("あ\nい\nう");
 	});
 
-	it("caps each line to 5 chars", () => {
-		expect(trimToLimit("あいうえおかき")).toBe("あいうえお");
+	it("caps each line to 6 chars", () => {
+		expect(trimToLimit("あいうえおかき")).toBe("あいうえおか");
 	});
 
-	it("caps to 2 lines", () => {
-		expect(trimToLimit("あ\nい\nう")).toBe("あ\nい");
+	it("caps to 3 lines", () => {
+		expect(trimToLimit("あ\nい\nう\nえ")).toBe("あ\nい\nう");
 	});
 
-	it("caps total to 10 chars", () => {
-		expect(trimToLimit("あいうえお\nかきくけこさ")).toBe(
-			"あいうえお\nかきくけこ",
+	it("caps total to 18 chars", () => {
+		expect(trimToLimit("あいうえおか\nきくけこさし\nすせそたちつて")).toBe(
+			"あいうえおか\nきくけこさし\nすせそたちつ",
 		);
 	});
 
-	it("drops empty lines after capping", () => {
-		expect(trimToLimit("\nあい")).toBe("あい");
+	it("preserves empty lines while editing (trailing Enter)", () => {
+		expect(trimToLimit("あい\n")).toBe("あい\n");
+		expect(trimToLimit("あ\nい\n")).toBe("あ\nい\n");
+		expect(trimToLimit("\nあい")).toBe("\nあい");
 	});
 
 	it("handles empty string", () => {

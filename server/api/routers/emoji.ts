@@ -6,6 +6,9 @@ import { protectedProcedure, publicProcedure, router } from "../trpc";
 /** デコード後の画像バイト数上限（約1.5MB — 128px 絵文字には十分） */
 const MAX_IMAGE_BYTES = 1_500_000;
 
+/** 1ユーザーあたりの保存数上限（ストレージ悪用対策） */
+const MAX_EMOJIS_PER_USER = 100;
+
 /** 一覧・作成結果で返す公開フィールド（imageData / pixelData / userId は返さない） */
 const listSelect = {
 	id: true,
@@ -78,6 +81,17 @@ export const emojiRouter = router({
 		)
 		.mutation(async ({ ctx, input }) => {
 			const { buffer, mimeType } = decodeImageDataUrl(input.imageData);
+
+			// ストレージ悪用対策: 1ユーザーあたりの保存数上限
+			const count = await prisma.emoji.count({
+				where: { userId: ctx.userId },
+			});
+			if (count >= MAX_EMOJIS_PER_USER) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: `保存できる絵文字は ${MAX_EMOJIS_PER_USER} 個までです。不要な絵文字を削除してください`,
+				});
+			}
 
 			return prisma.emoji.create({
 				data: {

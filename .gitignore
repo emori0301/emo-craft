@@ -40,3 +40,11 @@ next-env.d.ts
 # prisma
 /generated/prisma
 .env*
+
+# vercel
+.vercel
+
+# agent tooling artifacts (Neon integration)
+.agents/
+.claude/skills/neon-postgres
+skills-lock.json

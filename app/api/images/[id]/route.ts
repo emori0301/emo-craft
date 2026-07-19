@@ -43,8 +43,10 @@ export async function GET(
 	return new Response(Buffer.from(emoji.imageData), {
 		headers: {
 			"Content-Type": emoji.imageMimeType,
+			// s-maxage で Vercel の CDN にキャッシュさせ、関数呼び出し・DB クエリを減らす
+			// （画像は作成後に変更されないため immutable が安全）
 			"Cache-Control": emoji.isPublic
-				? "public, max-age=31536000, immutable"
+				? "public, max-age=31536000, s-maxage=31536000, immutable"
 				: "private, max-age=3600",
 		},
 	});

@@ -33,7 +33,14 @@ export function SaveEmojiForm({
 	inputClassName,
 }: SaveEmojiFormProps) {
 	return (
-		<div className="space-y-3 p-3 rounded-lg border bg-muted/50">
+		<form
+			className="space-y-3 p-3 rounded-lg border bg-muted/50"
+			onSubmit={(e) => {
+				// Enter キーでも保存できるようにする
+				e.preventDefault();
+				if (saveName.trim() && !isSaving && !busyLabel) onSubmit();
+			}}
+		>
 			<div className="space-y-1.5">
 				<Label htmlFor="save-emoji-name" className={labelClassName}>
 					名前
@@ -49,6 +56,8 @@ export function SaveEmojiForm({
 						inputClassName,
 					)}
 					maxLength={50}
+					autoComplete="off"
+					enterKeyHint="done"
 				/>
 			</div>
 			<div className="flex items-center justify-between">
@@ -63,16 +72,16 @@ export function SaveEmojiForm({
 			</div>
 			<div className="flex gap-2">
 				<Button
-					onClick={onSubmit}
+					type="submit"
 					disabled={!saveName.trim() || isSaving || !!busyLabel}
 					className="flex-1"
 				>
 					{busyLabel ?? (isSaving ? "保存中..." : "保存")}
 				</Button>
-				<Button variant="ghost" onClick={onCancel}>
+				<Button type="button" variant="ghost" onClick={onCancel}>
 					キャンセル
 				</Button>
 			</div>
-		</div>
+		</form>
 	);
 }

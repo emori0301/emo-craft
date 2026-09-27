@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Footer } from "@/components/layout/footer";
@@ -36,6 +36,17 @@ export const metadata: Metadata = {
 	},
 };
 
+export const viewport: Viewport = {
+	width: "device-width",
+	initialScale: 1,
+	// iPhone のノッチ / ホームインジケーター領域まで使い、safe-area で余白を取る
+	viewportFit: "cover",
+	themeColor: [
+		{ media: "(prefers-color-scheme: light)", color: "#f6f6f8" },
+		{ media: "(prefers-color-scheme: dark)", color: "#111113" },
+	],
+};
+
 // ブランドロゴ用フォントのみグローバルに読み込む。
 // エディター用の16フォントは app/editor/layout.tsx でのみ読み込む。
 const BRAND_FONT_URL =
@@ -63,7 +74,7 @@ export default function RootLayout({
 					disableTransitionOnChange
 				>
 					<TRPCReactProvider>
-						<div className="flex min-h-screen flex-col">
+						<div className="flex min-h-dvh flex-col">
 							<Header />
 							<main className="flex-1">{children}</main>
 							<Footer />

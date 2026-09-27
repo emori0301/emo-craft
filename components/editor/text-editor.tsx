@@ -1,22 +1,31 @@
 "use client";
 
-import { Download, Save } from "lucide-react";
+import { ImagePlus, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { LoginDialog } from "@/components/editor/login-dialog";
-import { SaveEmojiForm } from "@/components/editor/save-emoji-form";
+import {
+	CHECKER_SMALL_STYLE,
+	CHECKER_STYLE,
+	ColorPicker,
+	DraftBanner,
+	EditorActionBar,
+	isTypingTarget,
+	SaveDialogs,
+	SectionLabel,
+	SegmentedControl,
+} from "@/components/editor/editor-ui";
+import {
+	ImageLayersPanel,
+	SliderRow,
+} from "@/components/editor/image-layers-panel";
 import {
 	ShortcutHelp,
 	type ShortcutItem,
 } from "@/components/editor/shortcut-help";
 import { Button } from "@/components/ui/button";
-import {
-	Dialog,
-	DialogContent,
-	DialogHeader,
-	DialogTitle,
-} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { HANDLE_MARGIN, useCanvasGestures } from "@/hooks/use-canvas-gestures";
 import { useSaveEmoji } from "@/hooks/use-save-emoji";
 import { EXPORT_SIZE } from "@/lib/editor/constants";
 import { downloadDataUrl } from "@/lib/editor/download";
@@ -26,6 +35,28 @@ import {
 	type TextEditorDraft,
 } from "@/lib/editor/draft";
 import { encodeGifToDataUrl, type GifFrame } from "@/lib/editor/gif";
+import {
+	createImageElement,
+	ImageFileError,
+	imageFilesFrom,
+	loadImageFile,
+} from "@/lib/editor/image-file";
+import {
+	boxSize,
+	constrainPosition,
+	createImageLayer,
+	DEFAULT_TEXT_TRANSFORM,
+	findTargetAt,
+	type ImageLayer,
+	layersInDrawOrder,
+	MAX_IMAGE_LAYERS,
+	moveLayer,
+	SCALE_LIMITS,
+	TEXT_SCALE_LIMITS,
+	TEXT_TARGET,
+	type Transform,
+	visibleHandlePosition,
+} from "@/lib/editor/layers";
 import {
 	ANIM_CONFIGS,
 	type AnimConfig,
@@ -42,7 +73,7 @@ import {
 	type TextAlign,
 	trimToLimit,
 } from "@/lib/editor/text-config";
-import { cn } from "@/lib/utils";
+import { cn, createId } from "@/lib/utils";
 
 interface TextEditorInitialValues {
 	text?: string;
@@ -59,118 +90,69 @@ interface TextEditorProps {
 }
 
 const RENDER_SCALE = 4;
-
-/** 文字色・背景色のプリセットパレット */
-const COLOR_PRESETS = [
-	"#000000",
-	"#ffffff",
-	"#ef4444",
-	"#f97316",
-	"#eab308",
-	"#22c55e",
-	"#0891b2",
-	"#3b82f6",
-	"#8b5cf6",
-	"#ec4899",
-];
-
-/** 透明背景を示す市松模様 */
-const CHECKER_STYLE: React.CSSProperties = {
-	backgroundImage:
-		"linear-gradient(45deg, #d1d5db 25%, transparent 25%, transparent 75%, #d1d5db 75%), linear-gradient(45deg, #d1d5db 25%, transparent 25%, transparent 75%, #d1d5db 75%)",
-	backgroundSize: "16px 16px",
-	backgroundPosition: "0 0, 8px 8px",
-	backgroundColor: "#f9fafb",
-};
-
-const CHECKER_SMALL_STYLE: React.CSSProperties = {
-	...CHECKER_STYLE,
-	backgroundSize: "8px 8px",
-	backgroundPosition: "0 0, 4px 4px",
-};
+/** プレビュー・書き出し前の描画解像度 */
+const RENDER_SIZE = EXPORT_SIZE * RENDER_SCALE;
+/** 文字の当たり判定で字面から許容する距離（CSS px） */
+const TEXT_HIT_TOLERANCE = 8;
+/** 選択枠の色（ブランドのバイオレット） */
+const SELECTION_COLOR = "#8b5cf6";
 
 const TEXT_SHORTCUTS: ShortcutItem[] = [
 	{ keys: ["⌘/Ctrl", "S"], description: "保存ダイアログを開く" },
 	{ keys: ["⌘/Ctrl", "Enter"], description: "ダウンロード" },
+	{ keys: ["⌘/Ctrl", "V"], description: "画像を貼り付けて追加" },
+	{
+		keys: ["←", "↑", "→", "↓"],
+		description: "選択中の要素を移動（Shift で大きく）",
+	},
+	{ keys: ["Delete"], description: "選択中の画像を削除" },
+	{ keys: ["Esc"], description: "選択を解除" },
 	{ keys: ["?"], description: "ショートカット一覧を表示" },
 ];
 
-/** セクション見出し */
-function SectionLabel({ children }: { children: React.ReactNode }) {
-	return (
-		<h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-			{children}
-		</h3>
-	);
+/** モバイルで1つずつ表示する設定セクション */
+type SettingsSection = "text" | "font" | "color" | "image" | "anim";
+const SETTINGS_SECTIONS: { key: SettingsSection; label: string }[] = [
+	{ key: "text", label: "文字" },
+	{ key: "font", label: "フォント" },
+	{ key: "color", label: "カラー" },
+	{ key: "image", label: "画像" },
+	{ key: "anim", label: "動き" },
+];
+
+/** アニメーションの移動・拡大・回転・透明度・色相を適用して fn を描く */
+function withAnimation(
+	ctx: CanvasRenderingContext2D,
+	size: number,
+	p: AnimParams,
+	fn: () => void,
+) {
+	ctx.save();
+	if (p.scale !== 1 || p.rotate !== 0) {
+		ctx.translate(size / 2, size / 2);
+		if (p.rotate !== 0) ctx.rotate((p.rotate * Math.PI) / 180);
+		if (p.scale !== 1) ctx.scale(p.scale, p.scale);
+		ctx.translate(-size / 2, -size / 2);
+	}
+	if (p.offsetX !== 0 || p.offsetY !== 0) ctx.translate(p.offsetX, p.offsetY);
+	ctx.globalAlpha = p.alpha;
+	if (p.hueShift !== 0) ctx.filter = `hue-rotate(${p.hueShift}deg)`;
+	fn();
+	ctx.restore();
 }
 
-/** 色スウォッチ（パレット + カスタム + 任意で透明チップ） */
-function ColorPicker({
-	value,
-	onChange,
-	allowTransparent = false,
-	label,
-}: {
-	value: string;
-	onChange: (color: string) => void;
-	allowTransparent?: boolean;
-	label: string;
-}) {
-	return (
-		<div className="flex flex-wrap items-center gap-1.5">
-			{allowTransparent && (
-				<button
-					type="button"
-					onClick={() => onChange("")}
-					aria-label="透明にする"
-					aria-pressed={value === ""}
-					title="透明"
-					className={cn(
-						"h-8 w-8 rounded-md border-2 transition",
-						value === ""
-							? "border-primary ring-2 ring-primary/30"
-							: "border-border hover:border-muted-foreground/60",
-					)}
-					style={CHECKER_SMALL_STYLE}
-				/>
-			)}
-			{COLOR_PRESETS.map((color) => (
-				<button
-					key={color}
-					type="button"
-					onClick={() => onChange(color)}
-					aria-label={`${label}を ${color} にする`}
-					aria-pressed={value === color}
-					className={cn(
-						"h-8 w-8 rounded-md border-2 transition",
-						value === color
-							? "border-primary ring-2 ring-primary/30 scale-110"
-							: "border-border hover:border-muted-foreground/60",
-					)}
-					style={{ backgroundColor: color }}
-				/>
-			))}
-			<label
-				className="relative h-8 w-8 cursor-pointer overflow-hidden rounded-md border-2 border-dashed border-border hover:border-muted-foreground/60 transition"
-				title="カスタムカラー"
-			>
-				<span
-					className="absolute inset-0"
-					style={{
-						background:
-							"conic-gradient(#ef4444, #eab308, #22c55e, #3b82f6, #8b5cf6, #ef4444)",
-					}}
-				/>
-				<input
-					type="color"
-					value={value || "#ffffff"}
-					onChange={(e) => onChange(e.target.value)}
-					aria-label={`${label}をカスタムカラーで選択`}
-					className="absolute inset-0 opacity-0 cursor-pointer"
-				/>
-			</label>
-		</div>
-	);
+/** 要素の中心へ移動して回転した座標系で fn を描く */
+function withTransform(
+	ctx: CanvasRenderingContext2D,
+	size: number,
+	t: Transform,
+	fn: () => void,
+) {
+	ctx.save();
+	ctx.translate(t.x * size, t.y * size);
+	if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
+	fn();
+	ctx.restore();
 }
 
 export function TextEditor({
@@ -205,6 +187,17 @@ export function TextEditor({
 	const [backgroundColor, setBackgroundColor] = useState(
 		initialValues?.backgroundColor ?? "",
 	);
+	const [textTransform, setTextTransform] = useState<Transform>(
+		DEFAULT_TEXT_TRANSFORM,
+	);
+	const [layers, setLayers] = useState<ImageLayer[]>([]);
+	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [animateImages, setAnimateImages] = useState(true);
+	const [isAddingImages, setIsAddingImages] = useState(false);
+	const [isDragOver, setIsDragOver] = useState(false);
+	const [mobileSection, setMobileSection] = useState<SettingsSection>("text");
+	/** Web フォント・画像の読み込み完了で再描画するためのカウンタ */
+	const [renderVersion, setRenderVersion] = useState(0);
 
 	/** 現在の文字色設定（保存・下書き用のシリアライズ値） */
 	const serializedTextColor = serializeTextColor(
@@ -223,13 +216,24 @@ export function TextEditor({
 
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const miniCanvasRef = useRef<HTMLCanvasElement>(null);
+	const sceneCanvasRef = useRef<HTMLCanvasElement | null>(null);
 	const animFrameRef = useRef<number | null>(null);
+	/** レイヤー id → 描画用の画像要素 */
+	const imagesRef = useRef(new Map<string, HTMLImageElement>());
+	/** ドラッグ中・ホバー中・選択中はアニメーションを止めて静止状態で操作させる */
+	const interactingRef = useRef(false);
+	const hoveringRef = useRef(false);
+	/** キャンバスの内部解像度 / 表示サイズ（ResizeObserver で更新） */
+	const displayRatioRef = useRef(1);
 
 	const charCount = text.replace(/\n/g, "").length;
 	const lineCount = text.split("\n").length;
+	const hasText = text.trim().length > 0;
 	const isTransparent = !backgroundColor;
 	// アニメーション選択時は GIF、未選択時は PNG で書き出す
 	const outputFormat: "png" | "gif" = animationType ? "gif" : "png";
+	const selectedLayer = layers.find((l) => l.id === selectedId) ?? null;
+	const isTextSelected = selectedId === TEXT_TARGET;
 
 	const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
 		const val = e.target.value;
@@ -247,22 +251,13 @@ export function TextEditor({
 		setTimeout(() => setText(trimToLimit(value)), 0);
 	};
 
-	const drawContent = useCallback(
-		(
-			ctx: CanvasRenderingContext2D,
-			SIZE: number,
-			animParams: AnimParams = AP0,
-		) => {
-			ctx.clearRect(0, 0, SIZE, SIZE);
-			if (backgroundColor) {
-				ctx.fillStyle = backgroundColor;
-				ctx.fillRect(0, 0, SIZE, SIZE);
-			}
+	// ---- 描画 ----
 
-			const trimmed = text.trim();
-			if (!trimmed) return;
-
-			const lines = trimmed
+	/** 文字を SIZE×SIZE のボックスに収めて描く（座標系は呼び出し側で設定済み） */
+	const drawText = useCallback(
+		(ctx: CanvasRenderingContext2D, SIZE: number, animParams: AnimParams) => {
+			const lines = text
+				.trim()
 				.split("\n")
 				.slice(0, TEXT_LIMITS.maxLines)
 				.map((l) => l.slice(0, TEXT_LIMITS.maxCharsPerLine))
@@ -274,24 +269,6 @@ export function TextEditor({
 			const CONTENT_H = SIZE - PADDING * 2;
 			const SAFETY = 0.9;
 
-			ctx.save();
-
-			if (animParams.scale !== 1 || animParams.rotate !== 0) {
-				ctx.translate(SIZE / 2, SIZE / 2);
-				if (animParams.rotate !== 0)
-					ctx.rotate((animParams.rotate * Math.PI) / 180);
-				if (animParams.scale !== 1)
-					ctx.scale(animParams.scale, animParams.scale);
-				ctx.translate(-SIZE / 2, -SIZE / 2);
-			}
-
-			if (animParams.offsetX !== 0 || animParams.offsetY !== 0) {
-				ctx.translate(animParams.offsetX, animParams.offsetY);
-			}
-
-			ctx.globalAlpha = animParams.alpha;
-			if (animParams.hueShift !== 0)
-				ctx.filter = `hue-rotate(${animParams.hueShift}deg)`;
 			if (animParams.shadowBlur > 0) {
 				ctx.shadowBlur = animParams.shadowBlur;
 				ctx.shadowColor =
@@ -346,7 +323,7 @@ export function TextEditor({
 				ctx.textAlign = textAlign;
 
 				if (colorMode === "gradient") {
-					// キャンバス全体で連続するグラデーションになるよう、
+					// ボックス全体で連続するグラデーションになるよう、
 					// 行ごとの transform (translate + scale) を逆算した座標で作る
 					let gradient: CanvasGradient;
 					if (gradientDirection === "vertical") {
@@ -366,8 +343,6 @@ export function TextEditor({
 				ctx.fillText(line, 0, 0);
 				ctx.restore();
 			}
-
-			ctx.restore();
 		},
 		[
 			text,
@@ -375,7 +350,6 @@ export function TextEditor({
 			fontFamily,
 			textAlign,
 			textColor,
-			backgroundColor,
 			colorMode,
 			gradientFrom,
 			gradientTo,
@@ -383,75 +357,199 @@ export function TextEditor({
 		],
 	);
 
+	/** 背景 → 背面の画像 → 文字 → 前面の画像 の順に絵文字全体を描く */
+	// biome-ignore lint/correctness/useExhaustiveDependencies: renderVersion はフォント・画像の読み込み完了後に描き直すための依存
+	const drawScene = useCallback(
+		(
+			ctx: CanvasRenderingContext2D,
+			SIZE: number,
+			animParams: AnimParams = AP0,
+		) => {
+			ctx.clearRect(0, 0, SIZE, SIZE);
+			if (backgroundColor) {
+				ctx.fillStyle = backgroundColor;
+				ctx.fillRect(0, 0, SIZE, SIZE);
+			}
+			ctx.imageSmoothingEnabled = true;
+			ctx.imageSmoothingQuality = "high";
+
+			const drawLayers = (group: ImageLayer[]) => {
+				const paint = () => {
+					for (const layer of group) {
+						const img = imagesRef.current.get(layer.id);
+						if (!img) continue;
+						const { w, h } = boxSize(layer, SIZE);
+						withTransform(ctx, SIZE, layer, () => {
+							if (layer.flipX) ctx.scale(-1, 1);
+							ctx.globalAlpha *= layer.opacity;
+							ctx.drawImage(img, -w / 2, -h / 2, w, h);
+						});
+					}
+				};
+				if (group.length === 0) return;
+				if (animateImages) withAnimation(ctx, SIZE, animParams, paint);
+				else paint();
+			};
+
+			const { behind, front } = layersInDrawOrder(layers);
+			drawLayers(behind);
+			withAnimation(ctx, SIZE, animParams, () => {
+				withTransform(ctx, SIZE, textTransform, () => {
+					ctx.scale(textTransform.scale, textTransform.scale);
+					ctx.translate(-SIZE / 2, -SIZE / 2);
+					drawText(ctx, SIZE, animParams);
+				});
+			});
+			drawLayers(front);
+		},
+		[
+			backgroundColor,
+			layers,
+			animateImages,
+			textTransform,
+			drawText,
+			renderVersion,
+		],
+	);
+
+	/** 選択中の要素の枠と拡大・回転ハンドルを描く（プレビューのみ） */
+	const drawSelection = useCallback(
+		(ctx: CanvasRenderingContext2D, SIZE: number, animParams: AnimParams) => {
+			const target: (Transform & { aspect?: number }) | null = isTextSelected
+				? textTransform
+				: selectedLayer;
+			if (!target) return;
+			// 表示サイズに関わらず線やハンドルが同じ太さに見えるよう換算する
+			const ratio = displayRatioRef.current;
+			const { w, h } = boxSize(target, SIZE);
+			const animated = isTextSelected || animateImages;
+			const paintFrame = () =>
+				withTransform(ctx, SIZE, target, () => {
+					ctx.globalAlpha = 1;
+					ctx.filter = "none";
+					ctx.lineWidth = 1.5 * ratio;
+					ctx.strokeStyle = "rgba(255,255,255,0.9)";
+					ctx.strokeRect(-w / 2, -h / 2, w, h);
+					ctx.setLineDash([5 * ratio, 4 * ratio]);
+					ctx.strokeStyle = SELECTION_COLOR;
+					ctx.strokeRect(-w / 2, -h / 2, w, h);
+				});
+			if (animated) withAnimation(ctx, SIZE, animParams, paintFrame);
+			else paintFrame();
+
+			// 拡大・回転ハンドル（はみ出していても掴めるようキャンバス内に表示）
+			const handle = visibleHandlePosition(target, SIZE, HANDLE_MARGIN * ratio);
+			ctx.save();
+			ctx.beginPath();
+			ctx.arc(handle.x, handle.y, 8 * ratio, 0, Math.PI * 2);
+			ctx.fillStyle = "#ffffff";
+			ctx.fill();
+			ctx.lineWidth = 2.5 * ratio;
+			ctx.strokeStyle = SELECTION_COLOR;
+			ctx.stroke();
+			ctx.restore();
+		},
+		[isTextSelected, textTransform, selectedLayer, animateImages],
+	);
+
+	/** プレビュー（選択枠つき）と実寸プレビュー（枠なし）を描く */
+	const renderPreview = useCallback(
+		(animParams: AnimParams = AP0) => {
+			const canvas = canvasRef.current;
+			const ctx = canvas?.getContext("2d");
+			if (!canvas || !ctx) return;
+
+			const scene = sceneCanvasRef.current ?? document.createElement("canvas");
+			sceneCanvasRef.current = scene;
+			if (scene.width !== RENDER_SIZE) scene.width = scene.height = RENDER_SIZE;
+			const sceneCtx = scene.getContext("2d");
+			if (!sceneCtx) return;
+			drawScene(sceneCtx, RENDER_SIZE, animParams);
+
+			if (canvas.width !== RENDER_SIZE) {
+				canvas.width = canvas.height = RENDER_SIZE;
+			}
+			ctx.clearRect(0, 0, RENDER_SIZE, RENDER_SIZE);
+			ctx.drawImage(scene, 0, 0);
+			drawSelection(ctx, RENDER_SIZE, animParams);
+
+			const mini = miniCanvasRef.current;
+			const miniCtx = mini?.getContext("2d");
+			if (!mini || !miniCtx) return;
+			if (mini.width !== EXPORT_SIZE) mini.width = mini.height = EXPORT_SIZE;
+			miniCtx.imageSmoothingEnabled = true;
+			miniCtx.imageSmoothingQuality = "high";
+			miniCtx.clearRect(0, 0, EXPORT_SIZE, EXPORT_SIZE);
+			miniCtx.drawImage(scene, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
+		},
+		[drawScene, drawSelection],
+	);
+
 	// アニメーションループが最新の描画関数を参照するための ref
-	// （drawContent は編集のたびに変わるが、ループは再起動させない）
-	const drawContentRef = useRef(drawContent);
+	// （renderPreview は編集のたびに変わるが、ループは再起動させない）
+	const renderPreviewRef = useRef(renderPreview);
 	useEffect(() => {
-		drawContentRef.current = drawContent;
-	}, [drawContent]);
+		renderPreviewRef.current = renderPreview;
+	}, [renderPreview]);
 
-	/** メインプレビューを 128px 実寸プレビューへ転写 */
-	const blitMini = useCallback(() => {
-		const src = canvasRef.current;
-		const dst = miniCanvasRef.current;
-		if (!src || !dst) return;
-		const ctx = dst.getContext("2d");
-		if (!ctx) return;
-		dst.width = dst.height = EXPORT_SIZE;
-		ctx.imageSmoothingEnabled = true;
-		ctx.imageSmoothingQuality = "high";
-		ctx.clearRect(0, 0, EXPORT_SIZE, EXPORT_SIZE);
-		ctx.drawImage(src, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
-	}, []);
-
-	const drawCanvas = useCallback(() => {
-		const canvas = canvasRef.current;
-		if (!canvas) return;
-		const ctx = canvas.getContext("2d");
-		if (!ctx) return;
-		const SIZE = EXPORT_SIZE * RENDER_SCALE;
-		canvas.width = SIZE;
-		canvas.height = SIZE;
-		drawContent(ctx, SIZE);
-		blitMini();
-	}, [drawContent, blitMini]);
-
+	// Web フォントの読み込みを待って描き直す
 	useEffect(() => {
 		if (typeof document === "undefined") return;
-		const weights = ["400", "700", "900"];
+		let cancelled = false;
+		const bump = () => {
+			if (!cancelled) setRenderVersion((v) => v + 1);
+		};
 		Promise.allSettled(
-			weights.map((w) => document.fonts.load(`${w} 64px "${fontFamily}"`)),
-		).then(() => drawCanvas());
-		const t = setTimeout(drawCanvas, 400);
-		return () => clearTimeout(t);
-	}, [drawCanvas, fontFamily]);
+			["400", "700", "900"].map((w) =>
+				document.fonts.load(`${w} 64px "${fontFamily}"`),
+			),
+		).then(bump);
+		const t = setTimeout(bump, 400);
+		return () => {
+			cancelled = true;
+			clearTimeout(t);
+		};
+	}, [fontFamily]);
+
+	// 静止画のときは状態が変わるたびに描く（アニメーション中はループが描く）
+	useEffect(() => {
+		if (!animationType) renderPreview();
+	}, [animationType, renderPreview]);
+
+	// アニメーションループから選択状態を参照するための ref
+	const selectedIdRef = useRef(selectedId);
+	selectedIdRef.current = selectedId;
+
+	// 表示サイズが変わったら選択枠の太さを合わせて描き直す
+	useEffect(() => {
+		const canvas = canvasRef.current;
+		if (!canvas || typeof ResizeObserver === "undefined") return;
+		const update = () => {
+			const width = canvas.getBoundingClientRect().width;
+			if (width > 0) displayRatioRef.current = RENDER_SIZE / width;
+			renderPreviewRef.current();
+		};
+		update();
+		const observer = new ResizeObserver(update);
+		observer.observe(canvas);
+		return () => observer.disconnect();
+	}, []);
 
 	useEffect(() => {
-		if (animFrameRef.current) {
-			cancelAnimationFrame(animFrameRef.current);
-			animFrameRef.current = null;
-		}
-		if (!animationType) return; // 静止画は上の effect が描画する
-
+		if (!animationType) return;
 		const config = ANIM_CONFIGS[animationType];
-		const SIZE = EXPORT_SIZE * RENDER_SCALE;
 		const startTime = performance.now();
 		const totalMs = config.frames * config.delay;
 
 		const loop = (now: number) => {
 			const frameIdx = Math.floor(((now - startTime) % totalMs) / config.delay);
-			const canvas = canvasRef.current;
-			if (!canvas) return;
-			const ctx = canvas.getContext("2d");
-			if (!ctx) return;
-			canvas.width = SIZE;
-			canvas.height = SIZE;
-			drawContentRef.current(
-				ctx,
-				SIZE,
-				config.getParams(frameIdx, config.frames, SIZE),
+			const paused =
+				interactingRef.current ||
+				hoveringRef.current ||
+				selectedIdRef.current !== null;
+			renderPreviewRef.current(
+				paused ? AP0 : config.getParams(frameIdx, config.frames, RENDER_SIZE),
 			);
-			blitMini();
 			animFrameRef.current = requestAnimationFrame(loop);
 		};
 		animFrameRef.current = requestAnimationFrame(loop);
@@ -461,97 +559,294 @@ export function TextEditor({
 				animFrameRef.current = null;
 			}
 		};
-	}, [animationType, blitMini]);
+	}, [animationType]);
+
+	// ---- 書き出し ----
+
+	/**
+	 * 128px の書き出しフレームを描く関数を作る。
+	 * GIF の全フレームで同じ canvas を使い回す（フレームごとに確保しない）。
+	 */
+	const createFrameRenderer = useCallback(() => {
+		const renderCanvas = document.createElement("canvas");
+		renderCanvas.width = renderCanvas.height = RENDER_SIZE;
+		const exportCanvas = document.createElement("canvas");
+		exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
+		const renderCtx = renderCanvas.getContext("2d");
+		const exportCtx = exportCanvas.getContext("2d", {
+			willReadFrequently: true,
+		});
+		if (!renderCtx || !exportCtx) return null;
+		return (animParams: AnimParams = AP0) => {
+			drawScene(renderCtx, RENDER_SIZE, animParams);
+			exportCtx.clearRect(0, 0, EXPORT_SIZE, EXPORT_SIZE);
+			exportCtx.imageSmoothingEnabled = true;
+			exportCtx.imageSmoothingQuality = "high";
+			exportCtx.drawImage(renderCanvas, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
+			return { canvas: exportCanvas, ctx: exportCtx };
+		};
+	}, [drawScene]);
 
 	const buildGifDataUrl = useCallback(async (): Promise<string | null> => {
 		if (!animationType) return null;
 		const config = ANIM_CONFIGS[animationType];
-		const renderSize = EXPORT_SIZE * RENDER_SCALE;
-
-		const renderCanvas = document.createElement("canvas");
-		renderCanvas.width = renderCanvas.height = renderSize;
-		const renderCtx = renderCanvas.getContext("2d");
-		if (!renderCtx) return null;
-
-		const exportCanvas = document.createElement("canvas");
-		exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
-		const exportCtx = exportCanvas.getContext("2d");
-		if (!exportCtx) return null;
-		exportCtx.imageSmoothingEnabled = true;
-		exportCtx.imageSmoothingQuality = "high";
-
+		const renderFrame = createFrameRenderer();
+		if (!renderFrame) return null;
 		const gifFrames: GifFrame[] = [];
 		for (let f = 0; f < config.frames; f++) {
-			renderCanvas.width = renderCanvas.height = renderSize;
-			drawContent(
-				renderCtx,
-				renderSize,
-				config.getParams(f, config.frames, renderSize),
+			const { ctx } = renderFrame(
+				config.getParams(f, config.frames, RENDER_SIZE),
 			);
-
-			exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
-			exportCtx.drawImage(renderCanvas, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
-
 			gifFrames.push({
-				imageData: exportCtx.getImageData(0, 0, EXPORT_SIZE, EXPORT_SIZE),
+				imageData: ctx.getImageData(0, 0, EXPORT_SIZE, EXPORT_SIZE),
 				delay: config.delay,
 			});
 		}
-
 		return encodeGifToDataUrl(gifFrames, EXPORT_SIZE, EXPORT_SIZE, {
 			transparent: isTransparent,
 		});
-	}, [animationType, drawContent, isTransparent]);
+	}, [animationType, createFrameRenderer, isTransparent]);
 
-	const getImageData = useCallback(() => {
-		const offscreen = document.createElement("canvas");
-		offscreen.width = offscreen.height = EXPORT_SIZE * RENDER_SCALE;
-		const renderCtx = offscreen.getContext("2d");
-		if (!renderCtx) return null;
-		// アニメーション中でも静止状態で書き出すため、プレビューではなく直接描画する
-		drawContent(renderCtx, EXPORT_SIZE * RENDER_SCALE);
+	// アニメーション中でも静止状態で書き出すため、プレビューではなく直接描画する
+	const getImageData = useCallback(
+		() => createFrameRenderer()?.().canvas.toDataURL("image/png") ?? null,
+		[createFrameRenderer],
+	);
 
-		const exportCanvas = document.createElement("canvas");
-		exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
-		const ctx = exportCanvas.getContext("2d");
-		if (!ctx) return null;
-		ctx.imageSmoothingEnabled = true;
-		ctx.imageSmoothingQuality = "high";
-		ctx.drawImage(offscreen, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
-		return exportCanvas.toDataURL("image/png");
-	}, [drawContent]);
-
-	const handleDownload = async () => {
-		if (animationType) {
-			setIsGeneratingGif(true);
-			try {
-				const dataUrl = await buildGifDataUrl();
-				if (!dataUrl) return;
-				downloadDataUrl(dataUrl, `emoji_${Date.now()}.gif`);
-			} finally {
-				setIsGeneratingGif(false);
-			}
-		} else {
-			const data = getImageData();
-			if (!data) return;
-			downloadDataUrl(data, `emoji_${Date.now()}.png`);
+	/** 書き出し用の画像（アニメーションありなら GIF）を作る */
+	const buildImage = async (): Promise<string | null> => {
+		if (!animationType) return getImageData();
+		setIsGeneratingGif(true);
+		try {
+			return await buildGifDataUrl();
+		} catch {
+			toast.error("GIF の生成に失敗しました");
+			return null;
+		} finally {
+			setIsGeneratingGif(false);
 		}
 	};
 
-	const {
-		saveName,
-		setSaveName,
-		savePublic,
-		setSavePublic,
-		showSaveForm,
-		setShowSaveForm,
-		showLoginDialog,
-		setShowLoginDialog,
-		openSaveForm,
-		loginAndContinue,
-		submitSave,
-		isSaving,
-	} = useSaveEmoji({
+	const handleDownload = async () => {
+		if (isGeneratingGif) return;
+		const dataUrl = await buildImage();
+		if (!dataUrl) return;
+		downloadDataUrl(dataUrl, `emoji_${Date.now()}.${outputFormat}`);
+	};
+
+	// ---- 画像レイヤー ----
+
+	const layersRef = useRef(layers);
+	layersRef.current = layers;
+
+	/** 読み込み中の多重実行（ドロップ + 貼り付けの同時発生など）を防ぐ */
+	const addingRef = useRef(false);
+
+	const addImageFiles = async (files: File[]) => {
+		if (addingRef.current) {
+			toast.info("画像を読み込み中です。少し待ってからもう一度お試しください");
+			return;
+		}
+		const room = MAX_IMAGE_LAYERS - layersRef.current.length;
+		if (room <= 0) {
+			toast.error(`画像は ${MAX_IMAGE_LAYERS} 枚まで追加できます`);
+			return;
+		}
+		if (files.length > room) {
+			toast.info(`画像は ${MAX_IMAGE_LAYERS} 枚までのため、一部のみ追加します`);
+		}
+		addingRef.current = true;
+		setIsAddingImages(true);
+		const added: ImageLayer[] = [];
+		try {
+			for (const file of files) {
+				// 読み込めないファイルで枠を消費しないよう、成功数で上限を判定する
+				if (added.length >= room) break;
+				try {
+					const loaded = await loadImageFile(file);
+					added.push(
+						createImageLayer(
+							createId(),
+							loaded.src,
+							loaded.width,
+							loaded.height,
+						),
+					);
+				} catch (error) {
+					toast.error(
+						error instanceof ImageFileError
+							? error.message
+							: "画像を読み込めませんでした",
+					);
+				}
+			}
+		} finally {
+			addingRef.current = false;
+			setIsAddingImages(false);
+		}
+		if (added.length === 0) return;
+		setLayers((prev) =>
+			[...prev, ...added].slice(0, Math.max(prev.length, MAX_IMAGE_LAYERS)),
+		);
+		setSelectedId(added[added.length - 1].id);
+		setMobileSection("image");
+	};
+
+	const updateLayer = useCallback(
+		(id: string, patch: Partial<ImageLayer>) =>
+			setLayers((prev) =>
+				prev.map((l) => (l.id === id ? { ...l, ...patch } : l)),
+			),
+		[],
+	);
+
+	const removeLayer = (id: string) => {
+		const index = layers.findIndex((l) => l.id === id);
+		const removed = layers[index];
+		if (!removed) return;
+		setLayers((prev) => prev.filter((l) => l.id !== id));
+		setSelectedId((s) => (s === id ? null : s));
+		toast("画像を削除しました", {
+			action: {
+				label: "元に戻す",
+				onClick: () => {
+					if (layersRef.current.length >= MAX_IMAGE_LAYERS) {
+						toast.error(
+							`画像は ${MAX_IMAGE_LAYERS} 枚までのため元に戻せません`,
+						);
+						return;
+					}
+					setLayers((prev) =>
+						prev.some((l) => l.id === id)
+							? prev
+							: [...prev.slice(0, index), removed, ...prev.slice(index)],
+					);
+				},
+			},
+		});
+	};
+
+	// レイヤーと描画用の画像要素を同期する:
+	// 消えたレイヤーの画像は解放し、未読み込み（下書き復元・削除の取り消し）は読み込む
+	const pendingImagesRef = useRef(new Set<string>());
+	useEffect(() => {
+		const images = imagesRef.current;
+		const pending = pendingImagesRef.current;
+		const ids = new Set(layers.map((l) => l.id));
+		for (const id of images.keys()) {
+			if (!ids.has(id)) images.delete(id);
+		}
+		for (const layer of layers) {
+			if (images.has(layer.id) || pending.has(layer.id)) continue;
+			pending.add(layer.id);
+			createImageElement(layer.src)
+				.then((img) => {
+					pending.delete(layer.id);
+					if (!layersRef.current.some((l) => l.id === layer.id)) return;
+					images.set(layer.id, img);
+					setRenderVersion((v) => v + 1);
+				})
+				.catch(() => {
+					pending.delete(layer.id);
+					// 壊れた画像のレイヤーは捨てる
+					setLayers((prev) => prev.filter((l) => l.id !== layer.id));
+				});
+		}
+	}, [layers]);
+
+	/** 選択中の要素（文字 or 画像）の変形を更新する */
+	const transformTarget = useCallback(
+		(id: string, patch: Partial<Transform>) => {
+			if (id === TEXT_TARGET) setTextTransform((t) => ({ ...t, ...patch }));
+			else updateLayer(id, patch);
+		},
+		[updateLayer],
+	);
+
+	const selectTarget = useCallback((id: string | null) => {
+		setSelectedId(id);
+		if (id) setMobileSection(id === TEXT_TARGET ? "text" : "image");
+	}, []);
+
+	// 文字だけを静止状態で描いたマスク。当たり判定を字面で行い、
+	// 字の隙間から「文字の後ろ」の画像を選べるようにする
+	const textMaskRef = useRef<CanvasRenderingContext2D | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: renderVersion はフォント読み込み完了後に描き直すための依存
+	useEffect(() => {
+		if (!textMaskRef.current) {
+			const canvas = document.createElement("canvas");
+			canvas.width = canvas.height = RENDER_SIZE;
+			textMaskRef.current = canvas.getContext("2d", {
+				willReadFrequently: true,
+			});
+		}
+		const ctx = textMaskRef.current;
+		if (!ctx) return;
+		ctx.clearRect(0, 0, RENDER_SIZE, RENDER_SIZE);
+		withTransform(ctx, RENDER_SIZE, textTransform, () => {
+			ctx.scale(textTransform.scale, textTransform.scale);
+			ctx.translate(-RENDER_SIZE / 2, -RENDER_SIZE / 2);
+			drawText(ctx, RENDER_SIZE, AP0);
+		});
+	}, [drawText, textTransform, renderVersion]);
+
+	/** (x, y) の周囲（指先の太さ程度）に文字の字面があるか */
+	const isOnTextGlyph = (x: number, y: number): boolean => {
+		const ctx = textMaskRef.current;
+		if (!ctx) return true;
+		const r = Math.max(
+			4,
+			Math.round(TEXT_HIT_TOLERANCE * displayRatioRef.current),
+		);
+		const x0 = Math.max(0, Math.round(x) - r);
+		const y0 = Math.max(0, Math.round(y) - r);
+		const w = Math.min(RENDER_SIZE, Math.round(x) + r) - x0;
+		const h = Math.min(RENDER_SIZE, Math.round(y) + r) - y0;
+		if (w <= 0 || h <= 0) return false;
+		const { data } = ctx.getImageData(x0, y0, w, h);
+		for (let i = 3; i < data.length; i += 4) {
+			if (data[i] > 16) return true;
+		}
+		return false;
+	};
+
+	const textHitTransform = hasText ? textTransform : null;
+	const gestures = useCanvasGestures({
+		canvasRef,
+		size: RENDER_SIZE,
+		selectedId,
+		getTarget: (id) =>
+			id === TEXT_TARGET
+				? textTransform
+				: (layers.find((l) => l.id === id) ?? null),
+		findAt: (x, y) =>
+			findTargetAt(layers, textHitTransform, x, y, RENDER_SIZE, {
+				textHit: isOnTextGlyph,
+				selectedId,
+			}),
+		getScaleLimits: (id) =>
+			id === TEXT_TARGET ? TEXT_SCALE_LIMITS : SCALE_LIMITS,
+		onSelect: selectTarget,
+		onTransform: transformTarget,
+		onInteractionChange: (active) => {
+			interactingRef.current = active;
+		},
+	});
+
+	// 選択中の画像が消えたら選択を外す（Undo 削除や下書き復元のため）
+	useEffect(() => {
+		if (
+			selectedId &&
+			selectedId !== TEXT_TARGET &&
+			!layers.some((l) => l.id === selectedId)
+		) {
+			setSelectedId(null);
+		}
+	}, [layers, selectedId]);
+
+	// ---- 保存 ----
+
+	const save = useSaveEmoji({
 		collectDraft: () => ({
 			type: "TEXT",
 			text,
@@ -559,6 +854,11 @@ export function TextEditor({
 			fontFamily,
 			textColor: serializedTextColor,
 			backgroundColor,
+			textAlign,
+			animationType,
+			animateImages,
+			textTransform,
+			layers,
 			savedAt: Date.now(),
 		}),
 	});
@@ -588,14 +888,36 @@ export function TextEditor({
 
 	const restoreDraft = () => {
 		if (!availableDraft) return;
-		setText(availableDraft.text);
-		setFontWeight(availableDraft.fontWeight);
-		setFontFamily(availableDraft.fontFamily);
-		applyColorValue(availableDraft.textColor);
-		setBackgroundColor(availableDraft.backgroundColor);
-		clearDraft();
+		const draft = availableDraft;
 		setAvailableDraft(null);
-		toast.success("編集内容を復元しました");
+		setText(draft.text);
+		setFontWeight(draft.fontWeight);
+		setFontFamily(draft.fontFamily);
+		applyColorValue(draft.textColor);
+		setBackgroundColor(draft.backgroundColor);
+		if (draft.textAlign) setTextAlign(draft.textAlign);
+		if (draft.animationType !== undefined)
+			setAnimationType(draft.animationType);
+		if (draft.animateImages !== undefined)
+			setAnimateImages(draft.animateImages);
+		if (draft.textTransform) setTextTransform(draft.textTransform);
+		clearDraft();
+
+		// 画像要素の読み込みはレイヤー同期の effect に任せる
+		const restored = draft.layers ?? [];
+		setLayers((prev) =>
+			[
+				...restored,
+				...prev.filter((l) => !restored.some((r) => r.id === l.id)),
+			].slice(0, MAX_IMAGE_LAYERS),
+		);
+		if (draft.imagesDropped) {
+			toast.warning(
+				"編集内容を復元しました（画像は容量の都合で復元できませんでした）",
+			);
+		} else {
+			toast.success("編集内容を復元しました");
+		}
 	};
 
 	const discardDraft = () => {
@@ -603,48 +925,10 @@ export function TextEditor({
 		setAvailableDraft(null);
 	};
 
-	// キーボードショートカット（最新のハンドラを ref 経由で参照）
-	const shortcutActionsRef = useRef({
-		save: () => {},
-		download: () => {},
-		active: true,
-	});
-	shortcutActionsRef.current = {
-		save: openSaveForm,
-		download: handleDownload,
-		active,
-	};
-
-	useEffect(() => {
-		const onKeyDown = (e: KeyboardEvent) => {
-			if (!shortcutActionsRef.current.active) return;
-			if (!(e.metaKey || e.ctrlKey)) return;
-			if (e.key.toLowerCase() === "s") {
-				e.preventDefault();
-				shortcutActionsRef.current.save();
-			} else if (e.key === "Enter") {
-				e.preventDefault();
-				shortcutActionsRef.current.download();
-			}
-		};
-		window.addEventListener("keydown", onKeyDown);
-		return () => window.removeEventListener("keydown", onKeyDown);
-	}, []);
-
 	const handleSaveSubmit = async () => {
-		let imageData: string | null;
-		if (animationType) {
-			setIsGeneratingGif(true);
-			try {
-				imageData = await buildGifDataUrl();
-			} finally {
-				setIsGeneratingGif(false);
-			}
-		} else {
-			imageData = getImageData();
-		}
+		const imageData = await buildImage();
 		if (!imageData) return;
-		submitSave({
+		save.submitSave({
 			editorType: "TEXT",
 			imageData,
 			text,
@@ -655,66 +939,250 @@ export function TextEditor({
 		});
 	};
 
+	// ---- キーボード / クリップボード ----
+
+	// 最新のハンドラを ref 経由で参照し、リスナーは一度だけ張る
+	const shortcutActionsRef = useRef({
+		save: () => {},
+		download: () => {},
+		remove: (_id: string) => {},
+		nudge: (_dx: number, _dy: number) => {},
+		addFiles: (_files: File[]) => {},
+		deselect: () => {},
+		selectedId: null as string | null,
+		active: true,
+	});
+	shortcutActionsRef.current = {
+		save: save.openSaveForm,
+		download: handleDownload,
+		remove: removeLayer,
+		nudge: (dx, dy) => {
+			if (!selectedId) return;
+			const target = selectedId === TEXT_TARGET ? textTransform : selectedLayer;
+			if (!target) return;
+			transformTarget(
+				selectedId,
+				constrainPosition(target.x + dx, target.y + dy, false),
+			);
+		},
+		addFiles: addImageFiles,
+		deselect: () => setSelectedId(null),
+		selectedId,
+		active,
+	};
+
+	useEffect(() => {
+		const onKeyDown = (e: KeyboardEvent) => {
+			const actions = shortcutActionsRef.current;
+			if (!actions.active) return;
+			if (e.metaKey || e.ctrlKey) {
+				if (e.key.toLowerCase() === "s") {
+					e.preventDefault();
+					actions.save();
+				} else if (e.key === "Enter") {
+					e.preventDefault();
+					actions.download();
+				}
+				return;
+			}
+			if (!actions.selectedId || isTypingTarget(e.target)) return;
+			// スライダー操作中の矢印キーはスライダーに任せる
+			if (
+				e.target instanceof HTMLElement &&
+				e.target.closest("[role=slider]")
+			) {
+				return;
+			}
+			// ダイアログなどが開いているときはページ側の操作をしない
+			if (
+				e.defaultPrevented ||
+				document.querySelector(
+					"[role=dialog],[role=alertdialog],[role=listbox],[role=menu]",
+				)
+			) {
+				return;
+			}
+			const step = (e.shiftKey ? 8 : 1) / EXPORT_SIZE;
+			const arrows: Record<string, [number, number]> = {
+				ArrowLeft: [-step, 0],
+				ArrowRight: [step, 0],
+				ArrowUp: [0, -step],
+				ArrowDown: [0, step],
+			};
+			if (arrows[e.key]) {
+				e.preventDefault();
+				actions.nudge(...arrows[e.key]);
+			} else if (
+				(e.key === "Delete" || e.key === "Backspace") &&
+				actions.selectedId !== TEXT_TARGET
+			) {
+				e.preventDefault();
+				actions.remove(actions.selectedId);
+			} else if (e.key === "Escape") {
+				actions.deselect();
+			}
+		};
+		const onPaste = (e: ClipboardEvent) => {
+			if (!shortcutActionsRef.current.active) return;
+			const files = imageFilesFrom(e.clipboardData);
+			if (files.length === 0) return;
+			// 入力欄へのテキスト貼り付け（Excel などは画像も同時に載る）は邪魔しない
+			if (
+				isTypingTarget(e.target) &&
+				e.clipboardData?.types.includes("text/plain")
+			) {
+				return;
+			}
+			e.preventDefault();
+			shortcutActionsRef.current.addFiles(files);
+		};
+		window.addEventListener("keydown", onKeyDown);
+		window.addEventListener("paste", onPaste);
+		return () => {
+			window.removeEventListener("keydown", onKeyDown);
+			window.removeEventListener("paste", onPaste);
+		};
+	}, []);
+
+	const dropHandlers = {
+		onDragOver: (e: React.DragEvent) => {
+			if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+			e.preventDefault();
+			setIsDragOver(true);
+		},
+		onDragLeave: (e: React.DragEvent) => {
+			if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+				setIsDragOver(false);
+			}
+		},
+		onDrop: (e: React.DragEvent) => {
+			e.preventDefault();
+			setIsDragOver(false);
+			const files = imageFilesFrom(e.dataTransfer);
+			if (files.length > 0) addImageFiles(files);
+		},
+	};
+
+	/** モバイルでは選択中のセクションだけ表示し、PC では全部並べる */
+	const sectionClass = (key: SettingsSection) =>
+		cn(mobileSection !== key && "hidden lg:block");
+
+	const selectionLabel = isTextSelected
+		? "文字を選択中"
+		: selectedLayer
+			? `画像 ${layers.indexOf(selectedLayer) + 1} を選択中`
+			: null;
+
 	return (
-		<div>
+		<div {...dropHandlers}>
 			{availableDraft && (
-				<div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3">
-					<p className="text-sm">
-						ログイン前の編集内容があります。復元しますか？
-					</p>
-					<div className="flex gap-2">
-						<Button size="sm" onClick={restoreDraft}>
-							復元する
-						</Button>
-						<Button size="sm" variant="ghost" onClick={discardDraft}>
-							破棄
-						</Button>
-					</div>
-				</div>
+				<DraftBanner onRestore={restoreDraft} onDiscard={discardDraft} />
 			)}
 
-			<div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-				{/* ==== プレビュー（左・sticky） ==== */}
-				<div className="lg:sticky lg:top-20 self-start">
-					<div className="rounded-2xl border bg-card p-6 flex flex-col items-center gap-5">
+			<div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-6">
+				{/* ==== プレビュー（モバイルは上部に固定、PC は左に固定） ==== */}
+				<div className="sticky top-[calc(4rem+env(safe-area-inset-top))] z-30 -mx-4 self-start bg-background/95 px-4 pb-2 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 lg:top-20 lg:mx-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
+					<div className="relative flex items-center justify-center gap-4 rounded-2xl border bg-card p-2.5 sm:p-5 lg:flex-col lg:gap-5 lg:p-6">
 						<div
-							className="rounded-xl border overflow-hidden"
+							className="shrink-0 overflow-hidden rounded-xl border"
 							style={isTransparent ? CHECKER_STYLE : undefined}
 						>
 							<canvas
 								ref={canvasRef}
 								role="img"
-								aria-label="絵文字プレビュー"
-								className="block w-64 h-64 sm:w-72 sm:h-72"
+								aria-label="絵文字プレビュー（ドラッグで文字や画像を移動）"
+								className="block h-[min(48vw,12.5rem)] w-[min(48vw,12.5rem)] touch-none select-none sm:h-64 sm:w-64 lg:h-72 lg:w-72"
+								{...gestures}
+								onPointerEnter={(e) => {
+									if (e.pointerType === "mouse") hoveringRef.current = true;
+								}}
+								onPointerLeave={() => {
+									hoveringRef.current = false;
+								}}
+								onContextMenu={(e) => e.preventDefault()}
 							/>
 						</div>
 
-						{/* 実寸プレビュー */}
-						<div className="flex items-center gap-3">
-							<div
-								className="rounded-md border overflow-hidden"
-								style={isTransparent ? CHECKER_SMALL_STYLE : undefined}
-							>
-								<canvas
-									ref={miniCanvasRef}
-									role="img"
-									aria-label="実寸プレビュー（128px）"
-									className="block w-[64px] h-[64px]"
-								/>
+						<div className="flex min-w-0 flex-col gap-3 lg:w-full lg:flex-row lg:items-center lg:justify-center">
+							{/* 実寸プレビュー */}
+							<div className="flex items-center gap-3">
+								<div
+									className="shrink-0 overflow-hidden rounded-md border"
+									style={isTransparent ? CHECKER_SMALL_STYLE : undefined}
+								>
+									<canvas
+										ref={miniCanvasRef}
+										role="img"
+										aria-label="実寸プレビュー（128px）"
+										className="block h-10 w-10 sm:h-16 sm:w-16"
+									/>
+								</div>
+								<div className="text-xs leading-relaxed text-muted-foreground">
+									<span className="hidden sm:inline">Slack 上での</span>
+									見え方
+									<br />
+									<span className="tabular-nums">
+										{outputFormat.toUpperCase()} · 128px
+									</span>
+								</div>
 							</div>
-							<div className="text-xs text-muted-foreground leading-relaxed">
-								Slack 上での見え方
-								<br />
-								128×128px で書き出し
-							</div>
+							{selectionLabel ? (
+								<button
+									type="button"
+									onClick={() => setSelectedId(null)}
+									aria-label={`選択を解除（${selectionLabel}）`}
+									className="self-start rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition hover:bg-primary/20 lg:self-center"
+								>
+									{selectionLabel} ✕
+								</button>
+							) : (
+								<p className="text-xs text-muted-foreground lg:hidden">
+									タップで選んでドラッグで移動
+								</p>
+							)}
 						</div>
+
+						{isDragOver && (
+							<div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary bg-primary/10 text-sm font-medium text-primary backdrop-blur-[1px]">
+								<ImagePlus className="mr-2 h-5 w-5" />
+								ドロップして画像を追加
+							</div>
+						)}
 					</div>
+
+					{/* モバイル用の設定セクション切り替え */}
+					<nav
+						aria-label="設定の切り替え"
+						className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] lg:hidden"
+					>
+						{SETTINGS_SECTIONS.map(({ key, label }) => (
+							<button
+								key={key}
+								type="button"
+								onClick={() => setMobileSection(key)}
+								aria-pressed={mobileSection === key}
+								className={cn(
+									"flex-auto shrink-0 rounded-full border px-3 py-1.5 text-sm font-medium transition",
+									mobileSection === key
+										? "border-primary bg-primary text-primary-foreground"
+										: "bg-card text-muted-foreground hover:text-foreground",
+								)}
+							>
+								{label}
+								{key === "image" && layers.length > 0 && (
+									<span className="ml-1 tabular-nums opacity-80">
+										{layers.length}
+									</span>
+								)}
+							</button>
+						))}
+					</nav>
 				</div>
 
-				{/* ==== 設定（右） ==== */}
+				{/* ==== 設定 ==== */}
 				<div className="space-y-7 pb-4">
 					{/* テキスト */}
-					<section className="space-y-2">
+					<section className={cn("space-y-2", sectionClass("text"))}>
 						<div className="flex items-center justify-between">
 							<SectionLabel>テキスト</SectionLabel>
 							<span
@@ -734,21 +1202,67 @@ export function TextEditor({
 							onChange={handleTextChange}
 							onCompositionStart={handleCompositionStart}
 							onCompositionEnd={handleCompositionEnd}
-							placeholder={"テキストを入力\n（3行・各行6文字まで）"}
+							placeholder={
+								"テキストを入力\n（3行・各行6文字まで。空欄なら画像だけ）"
+							}
 							rows={3}
 							aria-label="絵文字のテキスト"
 							className={cn(
-								"w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-lg leading-relaxed",
+								"w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-base leading-relaxed sm:text-lg",
 								"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
 								"placeholder:text-muted-foreground placeholder:text-sm",
 							)}
 						/>
+						<div className="space-y-1 pt-1">
+							<SliderRow
+								id="text-scale"
+								label="文字の大きさ"
+								value={textTransform.scale * 100}
+								min={TEXT_SCALE_LIMITS.min * 100}
+								max={TEXT_SCALE_LIMITS.max * 100}
+								unit="%"
+								onChange={(v) =>
+									setTextTransform((t) => ({ ...t, scale: v / 100 }))
+								}
+							/>
+							<SliderRow
+								id="text-rotation"
+								label="文字の回転"
+								value={textTransform.rotation}
+								min={-180}
+								max={180}
+								unit="°"
+								onChange={(v) =>
+									setTextTransform((t) => ({ ...t, rotation: v }))
+								}
+							/>
+							<div className="flex flex-wrap items-center justify-between gap-2">
+								<p className="text-xs text-muted-foreground">
+									プレビュー上で文字をドラッグして移動できます
+								</p>
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									onClick={() => setTextTransform(DEFAULT_TEXT_TRANSFORM)}
+									disabled={
+										textTransform.x === DEFAULT_TEXT_TRANSFORM.x &&
+										textTransform.y === DEFAULT_TEXT_TRANSFORM.y &&
+										textTransform.scale === DEFAULT_TEXT_TRANSFORM.scale &&
+										textTransform.rotation === DEFAULT_TEXT_TRANSFORM.rotation
+									}
+								>
+									<RotateCcw className="h-3.5 w-3.5" />
+									位置・大きさをリセット
+								</Button>
+							</div>
+						</div>
 					</section>
 
 					{/* フォント */}
-					<section className="space-y-2.5">
+					<section className={cn("space-y-2.5", sectionClass("font"))}>
 						<SectionLabel>フォント</SectionLabel>
-						<div className="grid grid-cols-2 min-[480px]:grid-cols-3 xl:grid-cols-4 gap-2">
+						<div className="grid grid-cols-3 gap-2 xl:grid-cols-4">
 							{FONTS.map((font) => (
 								<button
 									key={font.value}
@@ -756,7 +1270,7 @@ export function TextEditor({
 									onClick={() => setFontFamily(font.value)}
 									aria-pressed={fontFamily === font.value}
 									className={cn(
-										"flex flex-col items-center gap-0.5 rounded-lg border-2 px-2 py-2 transition",
+										"flex flex-col items-center gap-0.5 rounded-lg border-2 px-1.5 py-2 transition",
 										fontFamily === font.value
 											? "border-primary bg-primary/5"
 											: "border-border hover:border-muted-foreground/50 hover:bg-muted/50",
@@ -768,7 +1282,7 @@ export function TextEditor({
 									>
 										あア
 									</span>
-									<span className="text-[10px] text-muted-foreground truncate max-w-full">
+									<span className="max-w-full truncate text-[10px] text-muted-foreground">
 										{font.label}
 									</span>
 								</button>
@@ -778,78 +1292,43 @@ export function TextEditor({
 						<div className="flex flex-wrap gap-x-6 gap-y-2 pt-1">
 							<div className="flex items-center gap-2">
 								<Label className="text-xs text-muted-foreground">太さ</Label>
-								<div className="flex rounded-lg border p-0.5">
-									{FONT_WEIGHTS.map((fw) => (
-										<button
-											key={fw.value}
-											type="button"
-											onClick={() => setFontWeight(fw.value)}
-											aria-pressed={fontWeight === fw.value}
-											className={cn(
-												"rounded-md px-3 py-1 text-xs font-medium transition",
-												fontWeight === fw.value
-													? "bg-primary text-primary-foreground"
-													: "text-muted-foreground hover:text-foreground",
-											)}
-										>
-											{fw.label}
-										</button>
-									))}
-								</div>
+								<SegmentedControl
+									ariaLabel="文字の太さ"
+									value={fontWeight}
+									onChange={setFontWeight}
+									options={FONT_WEIGHTS.map((fw) => [fw.value, fw.label])}
+								/>
 							</div>
 							<div className="flex items-center gap-2">
 								<Label className="text-xs text-muted-foreground">揃え</Label>
-								<div className="flex rounded-lg border p-0.5">
-									{TEXT_ALIGNS.map((a) => (
-										<button
-											key={a.value}
-											type="button"
-											onClick={() => setTextAlign(a.value)}
-											aria-pressed={textAlign === a.value}
-											className={cn(
-												"rounded-md px-3 py-1 text-xs font-medium transition",
-												textAlign === a.value
-													? "bg-primary text-primary-foreground"
-													: "text-muted-foreground hover:text-foreground",
-											)}
-										>
-											{a.label.replace("揃え", "")}
-										</button>
-									))}
-								</div>
+								<SegmentedControl
+									ariaLabel="文字揃え"
+									value={textAlign}
+									onChange={setTextAlign}
+									options={TEXT_ALIGNS.map((a) => [
+										a.value,
+										a.label.replace("揃え", ""),
+									])}
+								/>
 							</div>
 						</div>
 					</section>
 
 					{/* カラー */}
-					<section className="space-y-3">
+					<section className={cn("space-y-3", sectionClass("color"))}>
 						<SectionLabel>カラー</SectionLabel>
 						<div className="space-y-1.5">
 							<div className="flex items-center gap-3">
 								<Label className="text-xs text-muted-foreground">文字色</Label>
-								<div className="flex rounded-lg border p-0.5">
-									{(
-										[
-											["solid", "単色"],
-											["gradient", "グラデーション"],
-										] as const
-									).map(([mode, label]) => (
-										<button
-											key={mode}
-											type="button"
-											onClick={() => setColorMode(mode)}
-											aria-pressed={colorMode === mode}
-											className={cn(
-												"rounded-md px-3 py-1 text-xs font-medium transition",
-												colorMode === mode
-													? "bg-primary text-primary-foreground"
-													: "text-muted-foreground hover:text-foreground",
-											)}
-										>
-											{label}
-										</button>
-									))}
-								</div>
+								<SegmentedControl
+									ariaLabel="文字色の種類"
+									value={colorMode}
+									onChange={setColorMode}
+									options={[
+										["solid", "単色"],
+										["gradient", "グラデーション"],
+									]}
+								/>
 							</div>
 							{colorMode === "solid" ? (
 								<ColorPicker
@@ -863,29 +1342,15 @@ export function TextEditor({
 										<Label className="text-xs text-muted-foreground">
 											向き
 										</Label>
-										<div className="flex rounded-lg border p-0.5">
-											{(
-												[
-													["vertical", "上 → 下"],
-													["horizontal", "左 → 右"],
-												] as const
-											).map(([dir, label]) => (
-												<button
-													key={dir}
-													type="button"
-													onClick={() => setGradientDirection(dir)}
-													aria-pressed={gradientDirection === dir}
-													className={cn(
-														"rounded-md px-3 py-1 text-xs font-medium transition",
-														gradientDirection === dir
-															? "bg-primary text-primary-foreground"
-															: "text-muted-foreground hover:text-foreground",
-													)}
-												>
-													{label}
-												</button>
-											))}
-										</div>
+										<SegmentedControl
+											ariaLabel="グラデーションの向き"
+											value={gradientDirection}
+											onChange={setGradientDirection}
+											options={[
+												["vertical", "上 → 下"],
+												["horizontal", "左 → 右"],
+											]}
+										/>
 										{/* グラデーションのプレビュー */}
 										<span
 											aria-hidden="true"
@@ -942,108 +1407,95 @@ export function TextEditor({
 						</div>
 					</section>
 
+					{/* 画像 */}
+					<div className={sectionClass("image")}>
+						<ImageLayersPanel
+							layers={layers}
+							selectedId={selectedLayer?.id ?? null}
+							onSelect={selectTarget}
+							onAddFiles={addImageFiles}
+							onUpdate={updateLayer}
+							onRemove={removeLayer}
+							onMove={(id, to) => setLayers((prev) => moveLayer(prev, id, to))}
+							isLoading={isAddingImages}
+						/>
+					</div>
+
 					{/* アニメーション */}
-					<section className="space-y-2.5">
+					<section className={cn("space-y-2.5", sectionClass("anim"))}>
 						<div className="flex items-center justify-between">
 							<SectionLabel>アニメーション</SectionLabel>
 							<span className="text-xs text-muted-foreground">
 								選ぶと GIF で書き出されます
 							</span>
 						</div>
-						<div className="grid grid-cols-3 min-[480px]:grid-cols-4 gap-1.5">
-							<button
-								type="button"
-								onClick={() => setAnimationType(null)}
-								aria-pressed={animationType === null}
-								className={cn(
-									"flex items-center justify-center gap-1 rounded-lg border-2 px-2 py-2 text-xs font-medium transition",
-									animationType === null
-										? "border-primary bg-primary/5"
-										: "border-border hover:border-muted-foreground/50 hover:bg-muted/50",
-								)}
-							>
-								なし
-							</button>
-							{(Object.entries(ANIM_CONFIGS) as [AnimType, AnimConfig][]).map(
-								([key, cfg]) => (
-									<button
-										key={key}
-										type="button"
-										onClick={() => setAnimationType(key)}
-										aria-pressed={animationType === key}
-										className={cn(
-											"flex items-center justify-center gap-1 rounded-lg border-2 px-2 py-2 text-xs font-medium transition",
-											animationType === key
-												? "border-primary bg-primary/5"
-												: "border-border hover:border-muted-foreground/50 hover:bg-muted/50",
-										)}
-									>
-										<span className="truncate">{cfg.label}</span>
-									</button>
-								),
-							)}
+						<div className="grid grid-cols-3 gap-1.5 min-[480px]:grid-cols-4">
+							{(
+								[
+									[null, "なし"],
+									...(
+										Object.entries(ANIM_CONFIGS) as [AnimType, AnimConfig][]
+									).map(([key, cfg]) => [key, cfg.label] as const),
+								] as const
+							).map(([key, label]) => (
+								<button
+									key={key ?? "none"}
+									type="button"
+									onClick={() => setAnimationType(key)}
+									aria-pressed={animationType === key}
+									className={cn(
+										"flex min-h-10 items-center justify-center rounded-lg border-2 px-2 py-2 text-xs font-medium transition",
+										animationType === key
+											? "border-primary bg-primary/5"
+											: "border-border hover:border-muted-foreground/50 hover:bg-muted/50",
+									)}
+								>
+									<span className="truncate">{label}</span>
+								</button>
+							))}
 						</div>
+						{layers.length > 0 && (
+							<div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+								<Label
+									htmlFor="animate-images"
+									className="cursor-pointer text-sm"
+								>
+									画像も一緒に動かす
+								</Label>
+								<Switch
+									id="animate-images"
+									checked={animateImages}
+									onCheckedChange={setAnimateImages}
+								/>
+							</div>
+						)}
 					</section>
 				</div>
 			</div>
 
-			{/* ==== 操作バー（常時表示） ==== */}
-			<div className="sticky bottom-0 z-40 mt-6 -mx-4 border-t bg-card/95 px-4 py-3 shadow-[0_-1px_3px_rgba(0,0,0,0.04)] backdrop-blur supports-[backdrop-filter]:bg-card/85">
-				<div className="flex items-center justify-end gap-2">
-					<div className="mr-auto flex items-center gap-1.5">
-						<ShortcutHelp shortcuts={TEXT_SHORTCUTS} enabled={active} />
-						<span className="text-xs text-muted-foreground hidden sm:block">
-							{outputFormat === "gif"
-								? `GIF · ${animationType ? ANIM_CONFIGS[animationType].label : ""}`
+			<EditorActionBar
+				leading={
+					<>
+						<span className="hidden sm:inline-flex">
+							<ShortcutHelp shortcuts={TEXT_SHORTCUTS} enabled={active} />
+						</span>
+						<span className="hidden truncate text-xs text-muted-foreground sm:block">
+							{animationType
+								? `GIF · ${ANIM_CONFIGS[animationType].label}`
 								: "PNG · 静止画"}
 						</span>
-					</div>
-					<Button
-						onClick={handleDownload}
-						size="lg"
-						disabled={isGeneratingGif}
-						className="flex-1 sm:flex-none"
-					>
-						<Download className="mr-2 h-4 w-4" />
-						{isGeneratingGif
-							? "生成中..."
-							: `${outputFormat.toUpperCase()} ダウンロード`}
-					</Button>
-					<Button
-						onClick={openSaveForm}
-						variant="outline"
-						size="lg"
-						className="flex-1 sm:flex-none"
-					>
-						<Save className="mr-2 h-4 w-4" />
-						保存
-					</Button>
-				</div>
-			</div>
+					</>
+				}
+				downloadLabel={`${outputFormat.toUpperCase()} ダウンロード`}
+				onDownload={handleDownload}
+				isBusy={isGeneratingGif}
+				onSave={save.openSaveForm}
+			/>
 
-			{/* 保存ダイアログ */}
-			<Dialog open={showSaveForm} onOpenChange={setShowSaveForm}>
-				<DialogContent className="sm:max-w-md">
-					<DialogHeader>
-						<DialogTitle>マイ絵文字に保存</DialogTitle>
-					</DialogHeader>
-					<SaveEmojiForm
-						saveName={saveName}
-						onSaveNameChange={setSaveName}
-						savePublic={savePublic}
-						onSavePublicChange={setSavePublic}
-						onSubmit={handleSaveSubmit}
-						onCancel={() => setShowSaveForm(false)}
-						isSaving={isSaving}
-						busyLabel={isGeneratingGif ? "GIF生成中..." : undefined}
-					/>
-				</DialogContent>
-			</Dialog>
-
-			<LoginDialog
-				open={showLoginDialog}
-				onOpenChange={setShowLoginDialog}
-				onLogin={loginAndContinue}
+			<SaveDialogs
+				save={save}
+				onSubmit={handleSaveSubmit}
+				busyLabel={isGeneratingGif ? "GIF生成中..." : undefined}
 			/>
 		</div>
 	);

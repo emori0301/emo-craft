@@ -65,7 +65,7 @@ export default function MyEmojisPage() {
 
 	if (sessionPending) {
 		return (
-			<div className="container py-8 px-4">
+			<div className="container px-4 py-6 sm:py-8">
 				<Skeleton className="h-10 w-48 mb-8" />
 				<Skeleton className="h-64 w-full rounded-xl" />
 			</div>
@@ -74,9 +74,9 @@ export default function MyEmojisPage() {
 
 	if (!session?.user) {
 		return (
-			<div className="container py-8 px-4">
+			<div className="container px-4 py-6 sm:py-8">
 				<div className="mb-8">
-					<h1 className="text-4xl font-bold mb-2">マイ絵文字</h1>
+					<h1 className="mb-2 text-2xl font-bold sm:text-4xl">マイ絵文字</h1>
 					<p className="text-muted-foreground">
 						ログインして絵文字を保存・管理しましょう
 					</p>
@@ -96,9 +96,9 @@ export default function MyEmojisPage() {
 	}
 
 	return (
-		<div className="container py-8 px-4">
-			<div className="mb-8 flex items-center justify-between">
-				<h1 className="text-4xl font-bold">マイ絵文字</h1>
+		<div className="container px-4 py-6 sm:py-8">
+			<div className="mb-6 flex items-center justify-between gap-3 sm:mb-8">
+				<h1 className="text-2xl font-bold sm:text-4xl">マイ絵文字</h1>
 				<Button asChild>
 					<Link href="/editor">+ 新規作成</Link>
 				</Button>
@@ -108,9 +108,9 @@ export default function MyEmojisPage() {
 				<CardHeader>
 					<CardTitle>保存済み絵文字</CardTitle>
 				</CardHeader>
-				<CardContent>
+				<CardContent className="px-3 sm:px-6">
 					{isLoading ? (
-						<div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+						<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-5">
 							{Array.from({ length: 10 }, (_, i) => `sk-${i}`).map((key) => (
 								<Skeleton key={key} className="h-40 rounded-xl" />
 							))}
@@ -125,7 +125,7 @@ export default function MyEmojisPage() {
 							</Button>
 						</div>
 					) : (
-						<div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+						<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-5">
 							{emojis.map((emoji) => {
 								const isGif = emoji.imageMimeType === "image/gif";
 								const imageUrl = `/api/images/${emoji.id}`;
@@ -155,33 +155,39 @@ export default function MyEmojisPage() {
 
 										{/* アクションボタン */}
 										<div className="flex gap-1 mt-1">
-											<a
-												href={imageUrl}
-												download={`${emoji.name}.${isGif ? "gif" : "png"}`}
+											<Button
+												asChild
+												variant="outline"
+												size="sm"
+												className="h-9 w-9 p-0"
 											>
-												<Button
-													variant="outline"
-													size="sm"
-													className="h-8 w-8 p-0"
+												<a
+													href={imageUrl}
+													download={`${emoji.name}.${isGif ? "gif" : "png"}`}
 													title="ダウンロード"
+													aria-label={`「${emoji.name}」をダウンロード`}
 												>
 													<Download className="h-3.5 w-3.5" />
-												</Button>
-											</a>
-											<Link href={`/editor?edit=${emoji.id}`}>
-												<Button
-													variant="outline"
-													size="sm"
-													className="h-8 w-8 p-0"
+												</a>
+											</Button>
+											<Button
+												asChild
+												variant="outline"
+												size="sm"
+												className="h-9 w-9 p-0"
+											>
+												<Link
+													href={`/editor?edit=${emoji.id}`}
 													title="編集"
+													aria-label={`「${emoji.name}」を編集`}
 												>
 													<Pencil className="h-3.5 w-3.5" />
-												</Button>
-											</Link>
+												</Link>
+											</Button>
 											<Button
 												variant="outline"
 												size="sm"
-												className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:border-red-300"
+												className="h-9 w-9 p-0 text-red-500 hover:text-red-600 hover:border-red-300"
 												title="削除"
 												aria-label={`「${emoji.name}」を削除`}
 												onClick={() =>

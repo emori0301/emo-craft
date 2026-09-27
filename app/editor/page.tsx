@@ -1,5 +1,6 @@
 "use client";
 
+import { Grid3X3, Type } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { PixelEditor } from "@/components/editor/pixel-editor";
@@ -54,13 +55,9 @@ function EditorContent() {
 			: undefined;
 
 	return (
-		<div className="min-h-[calc(100vh-64px)] py-6 sm:py-8 px-4">
+		<div className="min-h-[calc(100dvh-64px)] px-4 pt-4 sm:pt-8">
 			<div className="container mx-auto max-w-7xl">
-				<div className="mb-6">
-					<h1 className="text-3xl sm:text-4xl font-bold mb-1">
-						{editId ? "絵文字を編集" : "エディター"}
-					</h1>
-				</div>
+				<h1 className="sr-only">{editId ? "絵文字を編集" : "エディター"}</h1>
 
 				{editId && isEditLoading ? (
 					// 編集対象の読み込み中はデフォルト値のエディターを一瞬見せない
@@ -77,10 +74,23 @@ function EditorContent() {
 						onValueChange={(v) => setActiveTab(v as "text" | "pixel")}
 						className="w-full"
 					>
-						<TabsList className="grid w-full max-w-sm grid-cols-2 mb-6">
-							<TabsTrigger value="text">テキスト</TabsTrigger>
-							<TabsTrigger value="pixel">ピクセル</TabsTrigger>
-						</TabsList>
+						<div className="mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-6">
+							<TabsList className="grid w-full max-w-sm grid-cols-2">
+								<TabsTrigger value="text" className="gap-1.5">
+									<Type className="h-4 w-4" />
+									テキスト・画像
+								</TabsTrigger>
+								<TabsTrigger value="pixel" className="gap-1.5">
+									<Grid3X3 className="h-4 w-4" />
+									ドット絵
+								</TabsTrigger>
+							</TabsList>
+							{editId && (
+								<p className="text-sm text-muted-foreground">
+									保存済みの絵文字を編集中（文字の設定のみ復元されます。保存すると新しい絵文字として追加されます）
+								</p>
+							)}
+						</div>
 						{/* forceMount + hidden で両エディタをマウントしたままにし、
 						    タブを行き来しても編集中の内容が消えないようにする */}
 						<TabsContent

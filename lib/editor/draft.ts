@@ -1,3 +1,6 @@
+import type { ImageLayer, Transform } from "./layers";
+import type { AnimType, TextAlign } from "./text-config";
+
 /**
  * ログイン前の編集内容を localStorage に退避する仕組み。
  * 保存にはログインが必要で、OAuth リダイレクトでエディターの状態が失われるため、
@@ -11,6 +14,14 @@ export type TextEditorDraft = {
 	fontFamily: string;
 	textColor: string;
 	backgroundColor: string;
+	/** 以下は後から追加したフィールド（古い下書きには無い） */
+	textAlign?: TextAlign;
+	animationType?: AnimType | null;
+	animateImages?: boolean;
+	textTransform?: Transform;
+	layers?: ImageLayer[];
+	/** 容量超過で画像を外して保存した */
+	imagesDropped?: boolean;
 	savedAt: number;
 };
 
@@ -28,11 +39,23 @@ const DRAFT_KEY = "emocraft:editor-draft";
 /** 下書きの有効期限（1時間） */
 const DRAFT_TTL_MS = 60 * 60 * 1000;
 
-export function saveDraft(draft: EditorDraft): void {
+function writeDraft(draft: EditorDraft): boolean {
 	try {
 		localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+		return true;
 	} catch {
-		// localStorage が使えない環境では黙って諦める
+		return false;
+	}
+}
+
+/**
+ * 下書きを保存する。画像入りで容量上限（数 MB）を超えた場合は画像を外して再試行する。
+ * localStorage が使えない環境では黙って諦める。
+ */
+export function saveDraft(draft: EditorDraft): void {
+	if (writeDraft(draft)) return;
+	if (draft.type === "TEXT" && draft.layers?.length) {
+		writeDraft({ ...draft, layers: [], imagesDropped: true });
 	}
 }
 

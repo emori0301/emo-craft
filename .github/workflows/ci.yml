@@ -12,6 +12,8 @@ concurrency:
 
 permissions:
   contents: read
+  # gitleaks-action が PR のコミット一覧を API で取るのに要る
+  pull-requests: read
 
 jobs:
   ci:

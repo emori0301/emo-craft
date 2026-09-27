@@ -103,17 +103,28 @@ describe("findTargetAt", () => {
 		);
 	});
 
-	it("prefers the selected element when it contains the point", () => {
+	it("uses the whole text box while the text is selected", () => {
 		const back = layer({ id: "back", scale: 1, behindText: true });
 		const front = layer({ id: "front", scale: 0.2 });
+		const textHit = () => false;
+		// 選択中の文字は枠内ならどこでも掴めるが、前面の画像より優先はしない
+		expect(
+			findTargetAt([back, front], DEFAULT_TEXT_TRANSFORM, 20, 20, SIZE, {
+				textHit,
+				selectedId: TEXT_TARGET,
+			}),
+		).toBe(TEXT_TARGET);
 		expect(
 			findTargetAt([back, front], DEFAULT_TEXT_TRANSFORM, 256, 256, SIZE, {
-				preferId: "back",
+				textHit,
+				selectedId: TEXT_TARGET,
 			}),
-		).toBe("back");
+		).toBe("front");
+		// 背面の画像を選択中でも、字面の上なら文字が選ばれる
 		expect(
-			findTargetAt([back], DEFAULT_TEXT_TRANSFORM, 256, 256, SIZE, {
-				preferId: TEXT_TARGET,
+			findTargetAt([back], DEFAULT_TEXT_TRANSFORM, 20, 20, SIZE, {
+				textHit: () => true,
+				selectedId: "back",
 			}),
 		).toBe(TEXT_TARGET);
 	});

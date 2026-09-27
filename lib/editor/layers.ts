@@ -172,8 +172,11 @@ export type FindTargetOptions = {
 	 * 指定すると字の隙間から後ろの画像を選べるようになる。
 	 */
 	textHit?: (px: number, py: number) => boolean;
-	/** 選択中の要素。ボックス内なら他の要素より優先する（重なっていても掴み直せる） */
-	preferId?: string | null;
+	/**
+	 * 選択中の要素。文字が選択中なら、字面でなく枠全体で当たり判定する
+	 * （表示中の選択枠の内側ならどこでも掴める）。重なり順は変えない。
+	 */
+	selectedId?: string | null;
 };
 
 /**
@@ -186,16 +189,12 @@ export function findTargetAt(
 	px: number,
 	py: number,
 	size: number,
-	{ textHit, preferId }: FindTargetOptions = {},
+	{ textHit, selectedId }: FindTargetOptions = {},
 ): string | null {
 	const isTextAt = () =>
 		!!textTransform &&
 		hitTest(textTransform, px, py, size) &&
-		(textHit ? textHit(px, py) : true);
-
-	if (preferId === TEXT_TARGET && isTextAt()) return TEXT_TARGET;
-	const preferred = layers.find((l) => l.id === preferId);
-	if (preferred && hitTest(preferred, px, py, size)) return preferred.id;
+		(selectedId === TEXT_TARGET || !textHit || textHit(px, py));
 
 	const { behind, front } = layersInDrawOrder(layers);
 	for (const layer of [...front].reverse()) {

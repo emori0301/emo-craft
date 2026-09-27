@@ -822,7 +822,7 @@ export function TextEditor({
 		findAt: (x, y) =>
 			findTargetAt(layers, textHitTransform, x, y, RENDER_SIZE, {
 				textHit: isOnTextGlyph,
-				preferId: selectedId,
+				selectedId,
 			}),
 		getScaleLimits: (id) =>
 			id === TEXT_TARGET ? TEXT_SCALE_LIMITS : SCALE_LIMITS,

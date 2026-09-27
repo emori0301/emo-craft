@@ -218,8 +218,11 @@ export function TextEditor({
 	const animFrameRef = useRef<number | null>(null);
 	/** レイヤー id → 描画用の画像要素 */
 	const imagesRef = useRef(new Map<string, HTMLImageElement>());
-	/** ドラッグ中はアニメーションを止めて静止状態で操作させる */
+	/** ドラッグ中・ホバー中・選択中はアニメーションを止めて静止状態で操作させる */
 	const interactingRef = useRef(false);
+	const hoveringRef = useRef(false);
+	/** キャンバスの内部解像度 / 表示サイズ（ResizeObserver で更新） */
+	const displayRatioRef = useRef(1);
 
 	const charCount = text.replace(/\n/g, "").length;
 	const lineCount = text.split("\n").length;
@@ -414,9 +417,8 @@ export function TextEditor({
 				? textTransform
 				: selectedLayer;
 			if (!target) return;
-			const canvas = canvasRef.current;
 			// 表示サイズに関わらず線やハンドルが同じ太さに見えるよう換算する
-			const ratio = SIZE / (canvas?.getBoundingClientRect().width || SIZE);
+			const ratio = displayRatioRef.current;
 			const { w, h } = boxSize(target, SIZE);
 			const animated = isTextSelected || animateImages;
 			const paintFrame = () =>
@@ -512,11 +514,21 @@ export function TextEditor({
 		if (!animationType) renderPreview();
 	}, [animationType, renderPreview]);
 
+	// アニメーションループから選択状態を参照するための ref
+	const selectedIdRef = useRef(selectedId);
+	selectedIdRef.current = selectedId;
+
 	// 表示サイズが変わったら選択枠の太さを合わせて描き直す
 	useEffect(() => {
 		const canvas = canvasRef.current;
 		if (!canvas || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(() => renderPreviewRef.current());
+		const update = () => {
+			const width = canvas.getBoundingClientRect().width;
+			if (width > 0) displayRatioRef.current = RENDER_SIZE / width;
+			renderPreviewRef.current();
+		};
+		update();
+		const observer = new ResizeObserver(update);
 		observer.observe(canvas);
 		return () => observer.disconnect();
 	}, []);
@@ -529,10 +541,12 @@ export function TextEditor({
 
 		const loop = (now: number) => {
 			const frameIdx = Math.floor(((now - startTime) % totalMs) / config.delay);
+			const paused =
+				interactingRef.current ||
+				hoveringRef.current ||
+				selectedIdRef.current !== null;
 			renderPreviewRef.current(
-				interactingRef.current
-					? AP0
-					: config.getParams(frameIdx, config.frames, RENDER_SIZE),
+				paused ? AP0 : config.getParams(frameIdx, config.frames, RENDER_SIZE),
 			);
 			animFrameRef.current = requestAnimationFrame(loop);
 		};
@@ -547,37 +561,40 @@ export function TextEditor({
 
 	// ---- 書き出し ----
 
-	/** 1フレームを 128px で描いた canvas を返す */
-	const renderExportFrame = useCallback(
-		(animParams: AnimParams = AP0): HTMLCanvasElement | null => {
-			const renderCanvas = document.createElement("canvas");
-			renderCanvas.width = renderCanvas.height = RENDER_SIZE;
-			const renderCtx = renderCanvas.getContext("2d");
-			if (!renderCtx) return null;
+	/**
+	 * 128px の書き出しフレームを描く関数を作る。
+	 * GIF の全フレームで同じ canvas を使い回す（フレームごとに確保しない）。
+	 */
+	const createFrameRenderer = useCallback(() => {
+		const renderCanvas = document.createElement("canvas");
+		renderCanvas.width = renderCanvas.height = RENDER_SIZE;
+		const exportCanvas = document.createElement("canvas");
+		exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
+		const renderCtx = renderCanvas.getContext("2d");
+		const exportCtx = exportCanvas.getContext("2d", {
+			willReadFrequently: true,
+		});
+		if (!renderCtx || !exportCtx) return null;
+		return (animParams: AnimParams = AP0) => {
 			drawScene(renderCtx, RENDER_SIZE, animParams);
-
-			const exportCanvas = document.createElement("canvas");
-			exportCanvas.width = exportCanvas.height = EXPORT_SIZE;
-			const exportCtx = exportCanvas.getContext("2d");
-			if (!exportCtx) return null;
+			exportCtx.clearRect(0, 0, EXPORT_SIZE, EXPORT_SIZE);
 			exportCtx.imageSmoothingEnabled = true;
 			exportCtx.imageSmoothingQuality = "high";
 			exportCtx.drawImage(renderCanvas, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
-			return exportCanvas;
-		},
-		[drawScene],
-	);
+			return { canvas: exportCanvas, ctx: exportCtx };
+		};
+	}, [drawScene]);
 
 	const buildGifDataUrl = useCallback(async (): Promise<string | null> => {
 		if (!animationType) return null;
 		const config = ANIM_CONFIGS[animationType];
+		const renderFrame = createFrameRenderer();
+		if (!renderFrame) return null;
 		const gifFrames: GifFrame[] = [];
 		for (let f = 0; f < config.frames; f++) {
-			const frame = renderExportFrame(
+			const { ctx } = renderFrame(
 				config.getParams(f, config.frames, RENDER_SIZE),
 			);
-			const ctx = frame?.getContext("2d");
-			if (!ctx) return null;
 			gifFrames.push({
 				imageData: ctx.getImageData(0, 0, EXPORT_SIZE, EXPORT_SIZE),
 				delay: config.delay,
@@ -586,12 +603,12 @@ export function TextEditor({
 		return encodeGifToDataUrl(gifFrames, EXPORT_SIZE, EXPORT_SIZE, {
 			transparent: isTransparent,
 		});
-	}, [animationType, renderExportFrame, isTransparent]);
+	}, [animationType, createFrameRenderer, isTransparent]);
 
 	// アニメーション中でも静止状態で書き出すため、プレビューではなく直接描画する
 	const getImageData = useCallback(
-		() => renderExportFrame()?.toDataURL("image/png") ?? null,
-		[renderExportFrame],
+		() => createFrameRenderer()?.().canvas.toDataURL("image/png") ?? null,
+		[createFrameRenderer],
 	);
 
 	/** 書き出し用の画像（アニメーションありなら GIF）を作る */
@@ -640,7 +657,9 @@ export function TextEditor({
 		setIsAddingImages(true);
 		const added: ImageLayer[] = [];
 		try {
-			for (const file of files.slice(0, room)) {
+			for (const file of files) {
+				// 読み込めないファイルで枠を消費しないよう、成功数で上限を判定する
+				if (added.length >= room) break;
 				try {
 					const loaded = await loadImageFile(file);
 					added.push(
@@ -688,12 +707,19 @@ export function TextEditor({
 		toast("画像を削除しました", {
 			action: {
 				label: "元に戻す",
-				onClick: () =>
+				onClick: () => {
+					if (layersRef.current.length >= MAX_IMAGE_LAYERS) {
+						toast.error(
+							`画像は ${MAX_IMAGE_LAYERS} 枚までのため元に戻せません`,
+						);
+						return;
+					}
 					setLayers((prev) =>
 						prev.some((l) => l.id === id)
 							? prev
 							: [...prev.slice(0, index), removed, ...prev.slice(index)],
-					),
+					);
+				},
 			},
 		});
 	};
@@ -837,7 +863,13 @@ export function TextEditor({
 				...prev.filter((l) => !restored.some((r) => r.id === l.id)),
 			].slice(0, MAX_IMAGE_LAYERS),
 		);
-		toast.success("編集内容を復元しました");
+		if (draft.imagesDropped) {
+			toast.warning(
+				"編集内容を復元しました（画像は容量の都合で復元できませんでした）",
+			);
+		} else {
+			toast.success("編集内容を復元しました");
+		}
 	};
 
 	const discardDraft = () => {
@@ -914,7 +946,14 @@ export function TextEditor({
 				return;
 			}
 			// ダイアログなどが開いているときはページ側の操作をしない
-			if (document.querySelector("[role=dialog]")) return;
+			if (
+				e.defaultPrevented ||
+				document.querySelector(
+					"[role=dialog],[role=alertdialog],[role=listbox],[role=menu]",
+				)
+			) {
+				return;
+			}
 			const step = (e.shiftKey ? 8 : 1) / EXPORT_SIZE;
 			const arrows: Record<string, [number, number]> = {
 				ArrowLeft: [-step, 0],
@@ -939,6 +978,13 @@ export function TextEditor({
 			if (!shortcutActionsRef.current.active) return;
 			const files = imageFilesFrom(e.clipboardData);
 			if (files.length === 0) return;
+			// 入力欄へのテキスト貼り付け（Excel などは画像も同時に載る）は邪魔しない
+			if (
+				isTypingTarget(e.target) &&
+				e.clipboardData?.types.includes("text/plain")
+			) {
+				return;
+			}
 			e.preventDefault();
 			shortcutActionsRef.current.addFiles(files);
 		};
@@ -980,7 +1026,7 @@ export function TextEditor({
 			: null;
 
 	return (
-		<div>
+		<div {...dropHandlers}>
 			{availableDraft && (
 				<DraftBanner onRestore={restoreDraft} onDiscard={discardDraft} />
 			)}
@@ -988,10 +1034,7 @@ export function TextEditor({
 			<div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-6">
 				{/* ==== プレビュー（モバイルは上部に固定、PC は左に固定） ==== */}
 				<div className="sticky top-[calc(4rem+env(safe-area-inset-top))] z-30 -mx-4 self-start bg-background/95 px-4 pb-2 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 lg:top-20 lg:mx-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
-					<div
-						className="relative flex items-center justify-center gap-4 rounded-2xl border bg-card p-2.5 sm:p-5 lg:flex-col lg:gap-5 lg:p-6"
-						{...dropHandlers}
-					>
+					<div className="relative flex items-center justify-center gap-4 rounded-2xl border bg-card p-2.5 sm:p-5 lg:flex-col lg:gap-5 lg:p-6">
 						<div
 							className="shrink-0 overflow-hidden rounded-xl border"
 							style={isTransparent ? CHECKER_STYLE : undefined}
@@ -1002,6 +1045,12 @@ export function TextEditor({
 								aria-label="絵文字プレビュー（ドラッグで文字や画像を移動）"
 								className="block h-[min(48vw,12.5rem)] w-[min(48vw,12.5rem)] touch-none select-none sm:h-64 sm:w-64 lg:h-72 lg:w-72"
 								{...gestures}
+								onPointerEnter={(e) => {
+									if (e.pointerType === "mouse") hoveringRef.current = true;
+								}}
+								onPointerLeave={() => {
+									hoveringRef.current = false;
+								}}
 								onContextMenu={(e) => e.preventDefault()}
 							/>
 						</div>

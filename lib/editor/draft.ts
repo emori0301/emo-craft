@@ -20,6 +20,8 @@ export type TextEditorDraft = {
 	animateImages?: boolean;
 	textTransform?: Transform;
 	layers?: ImageLayer[];
+	/** 容量超過で画像を外して保存した */
+	imagesDropped?: boolean;
 	savedAt: number;
 };
 
@@ -53,7 +55,7 @@ function writeDraft(draft: EditorDraft): boolean {
 export function saveDraft(draft: EditorDraft): void {
 	if (writeDraft(draft)) return;
 	if (draft.type === "TEXT" && draft.layers?.length) {
-		writeDraft({ ...draft, layers: [] });
+		writeDraft({ ...draft, layers: [], imagesDropped: true });
 	}
 }
 

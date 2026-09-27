@@ -4,6 +4,7 @@ import { type RefObject, useCallback, useEffect, useRef } from "react";
 import {
 	clamp,
 	constrainPosition,
+	hitTest,
 	normalizeRotation,
 	type Transform,
 	visibleHandlePosition,
@@ -270,8 +271,10 @@ export function useCanvasGestures(options: CanvasGestureOptions) {
 			const opts = optsRef.current;
 			const id = opts.selectedId;
 			const target = id ? opts.getTarget(id) : null;
-			// 何も選択していないときはページのスクロールを妨げない
+			// 選択中の要素の上にポインタがあるときだけ操作し、それ以外はページをスクロールさせる
 			if (!id || !target) return;
+			const p = toCanvas(e);
+			if (!hitTest(target, p.x, p.y, opts.size)) return;
 			e.preventDefault();
 			if (e.shiftKey) {
 				const delta = e.deltaY || e.deltaX;
@@ -291,7 +294,7 @@ export function useCanvasGestures(options: CanvasGestureOptions) {
 		};
 		canvas.addEventListener("wheel", onWheel, { passive: false });
 		return () => canvas.removeEventListener("wheel", onWheel);
-	}, [options.canvasRef]);
+	}, [options.canvasRef, toCanvas]);
 
 	return {
 		onPointerDown,

@@ -1,0 +1,6 @@
+# Orca が worktree を作ったときの準備。git 管理外の .env と node_modules は worktree に付いてこないので、
+# 共通スクリプト（~/.config/orca/worktree-setup.sh）で元のチェックアウトから .env をコピーし依存を入れる。
+# 依存が無いと lefthook の lint / typecheck が黙って飛ぶ。スクリプトが無い環境では何もしない。
+scripts:
+  setup: |
+    if [ -x "$HOME/.config/orca/worktree-setup.sh" ]; then "$HOME/.config/orca/worktree-setup.sh"; fi

@@ -1,0 +1,19 @@
+# コミット前に変更したファイルだけ Biome で整形・安全な自動修正をかけて再ステージし、push 前に型を通す。
+# 秘密情報のチェックは ~/.config/git/hooks の共通 hook（gitleaks）が全リポジトリに掛けている。
+# node_modules が無い環境（依存未インストールの clone など）では飛ばす。
+
+pre-commit:
+  commands:
+    biome:
+      glob: "*.{js,jsx,ts,tsx,mjs,cjs,json,jsonc,css}"
+      skip:
+        - run: test ! -d node_modules
+      run: npx biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      stage_fixed: true
+
+pre-push:
+  commands:
+    typecheck:
+      skip:
+        - run: test ! -d node_modules
+      run: npx tsc --noEmit

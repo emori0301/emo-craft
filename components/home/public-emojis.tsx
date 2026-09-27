@@ -1,8 +1,14 @@
 "use client";
 
-import { Download, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Download } from "lucide-react";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/trpc/react";
 
@@ -12,19 +18,18 @@ type Emoji = {
 	imageMimeType: string;
 };
 
-function EmojiModal({ emoji, onClose }: { emoji: Emoji; onClose: () => void }) {
-	const isGif = emoji.imageMimeType === "image/gif";
-	const imageUrl = `/api/images/${emoji.id}`;
-
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [onClose]);
+function EmojiDialog({
+	emoji,
+	onClose,
+}: {
+	emoji: Emoji | null;
+	onClose: () => void;
+}) {
+	const isGif = emoji?.imageMimeType === "image/gif";
+	const imageUrl = emoji ? `/api/images/${emoji.id}` : "";
 
 	const handleDownload = useCallback(async () => {
+		if (!emoji) return;
 		try {
 			const res = await fetch(imageUrl);
 			const blob = await res.blob();
@@ -37,47 +42,29 @@ function EmojiModal({ emoji, onClose }: { emoji: Emoji; onClose: () => void }) {
 		} catch {
 			window.open(imageUrl, "_blank");
 		}
-	}, [emoji.name, imageUrl, isGif]);
+	}, [emoji, imageUrl, isGif]);
 
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-			{/* backdrop — ダイアログの外側クリックで閉じる */}
-			<button
-				type="button"
-				className="absolute inset-0 w-full h-full cursor-default"
-				onClick={onClose}
-				aria-label="モーダルを閉じる"
-			/>
-
-			{/* dialog */}
-			<div
-				role="dialog"
-				aria-modal="true"
-				className="relative z-10 bg-background rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-5 w-[280px] mx-4"
-			>
-				<button
-					type="button"
-					onClick={onClose}
-					className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition-colors"
-					aria-label="閉じる"
-				>
-					<X className="h-5 w-5" />
-				</button>
-
-				<img
-					src={imageUrl}
-					alt={emoji.name}
-					className="w-32 h-32 object-contain rounded-xl border bg-muted/20"
-				/>
-
-				<p className="font-semibold text-lg text-center">{emoji.name}</p>
-
-				<Button onClick={handleDownload} className="w-full" size="lg">
-					<Download className="mr-2 h-4 w-4" />
-					ダウンロード
-				</Button>
-			</div>
-		</div>
+		<Dialog open={!!emoji} onOpenChange={(open) => !open && onClose()}>
+			<DialogContent className="max-w-xs">
+				{emoji && (
+					<div className="flex flex-col items-center gap-5 pt-2">
+						<DialogHeader>
+							<DialogTitle className="text-center">{emoji.name}</DialogTitle>
+						</DialogHeader>
+						<img
+							src={imageUrl}
+							alt={emoji.name}
+							className="h-32 w-32 rounded-xl border bg-muted/20 object-contain"
+						/>
+						<Button onClick={handleDownload} className="w-full" size="lg">
+							<Download className="h-4 w-4" />
+							ダウンロード
+						</Button>
+					</div>
+				)}
+			</DialogContent>
+		</Dialog>
 	);
 }
 
@@ -109,7 +96,7 @@ export function PublicEmojis() {
 				<h3 className="text-sm font-semibold text-muted-foreground text-center mb-4 uppercase tracking-wider">
 					みんなの絵文字
 				</h3>
-				<div className="flex flex-wrap justify-center gap-3">
+				<div className="flex flex-wrap justify-center gap-2 sm:gap-3">
 					{emojis.map((emoji) => (
 						<button
 							key={emoji.id}
@@ -131,9 +118,7 @@ export function PublicEmojis() {
 				</div>
 			</div>
 
-			{selected && (
-				<EmojiModal emoji={selected} onClose={() => setSelected(null)} />
-			)}
+			<EmojiDialog emoji={selected} onClose={() => setSelected(null)} />
 		</>
 	);
 }

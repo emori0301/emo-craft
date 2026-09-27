@@ -2,9 +2,10 @@
 
 import {
 	Circle,
-	Download,
 	Eraser,
 	Grid3X3,
+	ImagePlus,
+	Loader2,
 	Minus,
 	PaintBucket,
 	Pause,
@@ -13,7 +14,6 @@ import {
 	Play,
 	Plus,
 	Redo2,
-	Save,
 	Square,
 	Trash2,
 	Triangle,
@@ -23,8 +23,15 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { LoginDialog } from "@/components/editor/login-dialog";
-import { SaveEmojiForm } from "@/components/editor/save-emoji-form";
+import {
+	COLOR_PRESETS,
+	DraftBanner,
+	EditorActionBar,
+	isTypingTarget,
+	SaveDialogs,
+	SectionLabel,
+	SegmentedControl,
+} from "@/components/editor/editor-ui";
 import {
 	ShortcutHelp,
 	type ShortcutItem,
@@ -41,12 +48,6 @@ import {
 	AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import {
-	Dialog,
-	DialogContent,
-	DialogHeader,
-	DialogTitle,
-} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import {
 	Select,
@@ -66,6 +67,12 @@ import {
 } from "@/lib/editor/draft";
 import { encodeGifToDataUrl, type GifFrame } from "@/lib/editor/gif";
 import {
+	createImageElement,
+	ImageFileError,
+	loadImageFile,
+	pixelateImage,
+} from "@/lib/editor/image-file";
+import {
 	type Cell,
 	createEmptyGrid,
 	floodFill,
@@ -74,7 +81,7 @@ import {
 	plotRect,
 	plotTriangle,
 } from "@/lib/pixel/shapes";
-import { cn } from "@/lib/utils";
+import { cn, createId } from "@/lib/utils";
 
 const FIXED_DISPLAY_SIZE = 512;
 const MAX_FRAMES = 8;
@@ -86,15 +93,7 @@ const ZOOM_MAX = 2.5;
 const ZOOM_STEP = 0.25;
 
 const DEFAULT_COLORS = [
-	"#000000",
-	"#ffffff",
-	"#ef4444",
-	"#f97316",
-	"#eab308",
-	"#22c55e",
-	"#3b82f6",
-	"#8b5cf6",
-	"#ec4899",
+	...COLOR_PRESETS.filter((c) => c !== "#0891b2"),
 	"#78716c",
 ];
 
@@ -188,12 +187,73 @@ const PIXEL_SHORTCUTS: ShortcutItem[] = [
 	{ keys: ["?"], description: "ショートカット一覧を表示" },
 ];
 
-/** セクション見出し */
-function SectionLabel({ children }: { children: React.ReactNode }) {
+/** 描画色のパレット（プリセット + カスタム + カラーコード入力） */
+function PixelPalette({
+	drawColor,
+	customColor,
+	isEraser,
+	onPick,
+	onCustomText,
+	compact = false,
+}: {
+	drawColor: string;
+	customColor: string;
+	isEraser: boolean;
+	onPick: (color: string) => void;
+	onCustomText: (text: string) => void;
+	/** モバイル用: 1行の横スクロール表示 */
+	compact?: boolean;
+}) {
 	return (
-		<h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-			{children}
-		</h3>
+		<div className={cn(compact ? "flex items-center gap-1.5" : "space-y-2.5")}>
+			<div
+				className={cn(
+					"flex gap-1.5",
+					compact
+						? "min-w-0 flex-1 overflow-x-auto p-1 [scrollbar-width:none]"
+						: "flex-wrap",
+				)}
+			>
+				{DEFAULT_COLORS.map((color) => {
+					const selected = drawColor === color && !isEraser;
+					return (
+						<button
+							key={color}
+							type="button"
+							onClick={() => onPick(color)}
+							aria-label={`色 ${color} を選択`}
+							aria-pressed={selected}
+							className={cn(
+								"h-9 w-9 shrink-0 rounded-md border-2 transition",
+								selected
+									? "border-primary ring-2 ring-primary/30 scale-110"
+									: "border-border hover:border-muted-foreground/60",
+							)}
+							style={{ backgroundColor: color }}
+						/>
+					);
+				})}
+			</div>
+			<div className="flex shrink-0 items-center gap-2">
+				<input
+					type="color"
+					value={customColor}
+					onChange={(e) => onPick(e.target.value)}
+					aria-label="カスタムカラーを選択"
+					className="h-9 w-10 flex-shrink-0 cursor-pointer rounded border"
+				/>
+				{!compact && (
+					<input
+						type="text"
+						value={customColor}
+						onChange={(e) => onCustomText(e.target.value)}
+						aria-label="カラーコード"
+						className="flex-1 rounded-md border bg-background px-3 py-2 text-sm"
+						placeholder="#000000"
+					/>
+				)}
+			</div>
+		</div>
 	);
 }
 
@@ -274,9 +334,7 @@ export function PixelEditor({
 	const [frames, setFrames] = useState<string[][][]>(() => [
 		initGrid.map((r) => [...r]),
 	]);
-	const [frameIds, setFrameIds] = useState<string[]>(() => [
-		crypto.randomUUID(),
-	]);
+	const [frameIds, setFrameIds] = useState<string[]>(() => [createId()]);
 	const [currentFrame, setCurrentFrame] = useState(0);
 	// stack と index を1つの state にまとめ、非同期更新での不整合を防ぐ
 	const [history, setHistory] = useState<{
@@ -340,7 +398,7 @@ export function PixelEditor({
 		const newFrames = [createEmptyGrid(n)];
 		setCanvasSize(newSize);
 		setFrames(newFrames);
-		setFrameIds([crypto.randomUUID()]);
+		setFrameIds([createId()]);
 		setCurrentFrame(0);
 		setHistory({
 			stack: [newFrames.map((f) => f.map((row) => [...row]))],
@@ -568,14 +626,7 @@ export function PixelEditor({
 	useEffect(() => {
 		const onKeyDown = (e: KeyboardEvent) => {
 			if (!shortcutRef.current.active) return;
-			const target = e.target as HTMLElement | null;
-			if (
-				target instanceof HTMLInputElement ||
-				target instanceof HTMLTextAreaElement ||
-				target?.isContentEditable
-			) {
-				return;
-			}
+			if (isTypingTarget(e.target)) return;
 			const actions = shortcutRef.current;
 
 			if (e.metaKey || e.ctrlKey) {
@@ -682,7 +733,7 @@ export function PixelEditor({
 		];
 		const newIds = [
 			...frameIds.slice(0, currentFrame + 1),
-			crypto.randomUUID(),
+			createId(),
 			...frameIds.slice(currentFrame + 1),
 		];
 		setFrames(newFrames);
@@ -915,20 +966,7 @@ export function PixelEditor({
 
 	// ---- Save ----
 
-	const {
-		saveName,
-		setSaveName,
-		savePublic,
-		setSavePublic,
-		showSaveForm,
-		setShowSaveForm,
-		showLoginDialog,
-		setShowLoginDialog,
-		openSaveForm,
-		loginAndContinue,
-		submitSave,
-		isSaving,
-	} = useSaveEmoji({
+	const save = useSaveEmoji({
 		collectDraft: () => ({
 			type: "PIXEL",
 			frames,
@@ -953,7 +991,7 @@ export function PixelEditor({
 		const restored = availableDraft.frames.map((f) => f.map((row) => [...row]));
 		setCanvasSize(String(availableDraft.canvasSize));
 		setFrames(restored);
-		setFrameIds(restored.map(() => crypto.randomUUID()));
+		setFrameIds(restored.map(() => createId()));
 		setCurrentFrame(0);
 		setFrameDelay(availableDraft.frameDelay);
 		setHistory({
@@ -982,12 +1020,53 @@ export function PixelEditor({
 		} else {
 			imageData = getImageData();
 		}
-		submitSave({
+		save.submitSave({
 			editorType: "PIXEL",
 			imageData,
 			pixelData: frames[currentFrame],
 			pixelCanvasSize: size,
 		});
+	};
+
+	// ---- Image import ----
+
+	const importInputRef = useRef<HTMLInputElement>(null);
+	const [isImporting, setIsImporting] = useState(false);
+
+	/** 画像を現在のグリッドサイズでドット絵化し、現在のフレームに取り込む */
+	const importImage = async (file: File) => {
+		setIsImporting(true);
+		try {
+			const loaded = await loadImageFile(file);
+			const img = await createImageElement(loaded.src);
+			const grid = pixelateImage(img, size);
+			const newFrames = frames.map((f, i) => (i === currentFrame ? grid : f));
+			setFrames(newFrames);
+			saveToHistory(newFrames);
+			toast.success("画像をドット絵に変換しました（元に戻すで取り消せます）");
+		} catch (error) {
+			toast.error(
+				error instanceof ImageFileError
+					? error.message
+					: "画像を読み込めませんでした",
+			);
+		} finally {
+			setIsImporting(false);
+		}
+	};
+
+	const pickColor = (color: string) => {
+		setActiveTool((t) => (t === "eraser" ? "pencil" : t));
+		setDrawColor(color);
+		setCustomColor(color);
+	};
+
+	const handleCustomColorText = (value: string) => {
+		setCustomColor(value);
+		if (/^#[0-9a-fA-F]{6}$/.test(value)) {
+			setActiveTool((t) => (t === "eraser" ? "pencil" : t));
+			setDrawColor(value);
+		}
 	};
 
 	const isShapeTool = SHAPE_TOOLS.includes(activeTool);
@@ -997,7 +1076,7 @@ export function PixelEditor({
 	shortcutRef.current = {
 		undo,
 		redo,
-		save: openSaveForm,
+		save: save.openSaveForm,
 		download: handleDownload,
 		togglePlay: () => setIsPlaying((p) => !p),
 		selectFrame: (i: number) => setCurrentFrame(i),
@@ -1008,27 +1087,15 @@ export function PixelEditor({
 	return (
 		<div>
 			{availableDraft && (
-				<div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3">
-					<p className="text-sm">
-						ログイン前の編集内容があります。復元しますか？
-					</p>
-					<div className="flex gap-2">
-						<Button size="sm" onClick={restoreDraft}>
-							復元する
-						</Button>
-						<Button size="sm" variant="ghost" onClick={discardDraft}>
-							破棄
-						</Button>
-					</div>
-				</div>
+				<DraftBanner onRestore={restoreDraft} onDiscard={discardDraft} />
 			)}
 
-			<div className="grid gap-6 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+			<div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
 				{/* ==== ワークスペース（左） ==== */}
 				<div className="space-y-3">
 					{/* ツールバー */}
-					<div className="flex flex-wrap items-center gap-1.5 rounded-xl border bg-card p-2">
-						<div className="flex gap-1">
+					<div className="flex flex-wrap items-center gap-1 rounded-xl border bg-card p-1.5 sm:gap-1.5 sm:p-2">
+						<div className="flex flex-wrap gap-1">
 							{TOOL_DEFS.map(({ tool, label, shortcut, icon }) => (
 								<Button
 									key={tool}
@@ -1159,9 +1226,49 @@ export function PixelEditor({
 								<ZoomIn className="h-4 w-4" />
 							</Button>
 						</div>
-						<div className="ml-auto">
+						<div className="mx-1 h-6 w-px bg-border" />
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => importInputRef.current?.click()}
+							disabled={isImporting || isPlaying}
+							title="画像を取り込んでドット絵にする"
+							aria-label="画像を取り込んでドット絵にする"
+							className="px-2.5"
+						>
+							{isImporting ? (
+								<Loader2 className="h-4 w-4 animate-spin" />
+							) : (
+								<ImagePlus className="h-4 w-4" />
+							)}
+							<span className="hidden text-xs xl:inline">画像から作成</span>
+						</Button>
+						<input
+							ref={importInputRef}
+							type="file"
+							accept="image/*"
+							className="hidden"
+							onChange={(e) => {
+								const file = e.target.files?.[0];
+								if (file) importImage(file);
+								e.target.value = "";
+							}}
+						/>
+						<div className="ml-auto hidden sm:block">
 							<ShortcutHelp shortcuts={PIXEL_SHORTCUTS} enabled={active} />
 						</div>
+					</div>
+
+					{/* モバイル: 描画色をキャンバスのすぐ上で選べるようにする */}
+					<div className="rounded-xl border bg-card p-1.5 lg:hidden">
+						<PixelPalette
+							compact
+							drawColor={drawColor}
+							customColor={customColor}
+							isEraser={activeTool === "eraser"}
+							onPick={pickColor}
+							onCustomText={handleCustomColorText}
+						/>
 					</div>
 
 					{/* キャンバス（ズーム時はスクロールでパン） */}
@@ -1177,8 +1284,10 @@ export function PixelEditor({
 							className={`block touch-none select-none rounded-lg mx-auto ${isPlaying ? "cursor-default" : "cursor-crosshair"}`}
 							style={{
 								imageRendering: "pixelated",
+								// 高さは縦横比から決める（狭い画面で幅だけ縮んで歪まないように）
 								width: Math.round(BASE_DISPLAY_SIZE * zoom),
-								height: Math.round(BASE_DISPLAY_SIZE * zoom),
+								height: "auto",
+								aspectRatio: "1 / 1",
 								maxWidth: zoom <= 1 ? "100%" : undefined,
 							}}
 							onPointerDown={isPlaying ? undefined : handlePointerDown}
@@ -1272,56 +1381,16 @@ export function PixelEditor({
 
 				{/* ==== 設定（右） ==== */}
 				<div className="space-y-6">
-					{/* カラー */}
-					<section className="space-y-2.5">
+					{/* カラー（モバイルはキャンバス上部に表示） */}
+					<section className="hidden space-y-2.5 lg:block">
 						<SectionLabel>カラー</SectionLabel>
-						<div className="flex flex-wrap gap-1.5">
-							{DEFAULT_COLORS.map((color) => (
-								<button
-									key={color}
-									type="button"
-									onClick={() => {
-										setActiveTool((t) => (t === "eraser" ? "pencil" : t));
-										setDrawColor(color);
-										setCustomColor(color);
-									}}
-									aria-label={`色 ${color} を選択`}
-									aria-pressed={drawColor === color && activeTool !== "eraser"}
-									className={cn(
-										"h-9 w-9 rounded-md border-2 transition",
-										drawColor === color && activeTool !== "eraser"
-											? "border-primary ring-2 ring-primary/30 scale-110"
-											: "border-border hover:border-muted-foreground/60",
-									)}
-									style={{ backgroundColor: color }}
-								/>
-							))}
-						</div>
-						<div className="flex gap-2 items-center">
-							<input
-								type="color"
-								value={customColor}
-								onChange={(e) => {
-									setActiveTool((t) => (t === "eraser" ? "pencil" : t));
-									setDrawColor(e.target.value);
-									setCustomColor(e.target.value);
-								}}
-								aria-label="カスタムカラーを選択"
-								className="h-9 w-10 cursor-pointer rounded border flex-shrink-0"
-							/>
-							<input
-								type="text"
-								value={customColor}
-								onChange={(e) => {
-									setCustomColor(e.target.value);
-									if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
-										setDrawColor(e.target.value);
-								}}
-								aria-label="カラーコード"
-								className="flex-1 rounded-md border px-3 py-2 text-sm bg-background"
-								placeholder="#000000"
-							/>
-						</div>
+						<PixelPalette
+							drawColor={drawColor}
+							customColor={customColor}
+							isEraser={activeTool === "eraser"}
+							onPick={pickColor}
+							onCustomText={handleCustomColorText}
+						/>
 					</section>
 
 					{/* キャンバス設定 */}
@@ -1365,75 +1434,30 @@ export function PixelEditor({
 				</div>
 			</div>
 
-			{/* ==== 操作バー（常時表示） ==== */}
-			<div className="sticky bottom-0 z-40 mt-6 -mx-4 border-t bg-card/95 px-4 py-3 shadow-[0_-1px_3px_rgba(0,0,0,0.04)] backdrop-blur supports-[backdrop-filter]:bg-card/85">
-				<div className="flex items-center justify-end gap-2">
-					{isAnimated && (
-						<div className="mr-auto flex rounded-lg border p-0.5">
-							{(["png", "gif"] as const).map((fmt) => (
-								<button
-									key={fmt}
-									type="button"
-									onClick={() => setOutputFormat(fmt)}
-									aria-pressed={outputFormat === fmt}
-									className={cn(
-										"rounded-md px-3 py-1 text-xs font-medium transition",
-										outputFormat === fmt
-											? "bg-primary text-primary-foreground"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									{fmt.toUpperCase()}
-								</button>
-							))}
-						</div>
-					)}
-					<Button
-						onClick={handleDownload}
-						size="lg"
-						disabled={isDownloading}
-						className="flex-1 sm:flex-none"
-					>
-						<Download className="mr-2 h-4 w-4" />
-						{isDownloading
-							? "生成中..."
-							: `${isAnimated ? outputFormat.toUpperCase() : "PNG"} ダウンロード`}
-					</Button>
-					<Button
-						onClick={openSaveForm}
-						variant="outline"
-						size="lg"
-						className="flex-1 sm:flex-none"
-					>
-						<Save className="mr-2 h-4 w-4" />
-						保存
-					</Button>
-				</div>
-			</div>
+			<EditorActionBar
+				leading={
+					isAnimated && (
+						<SegmentedControl
+							ariaLabel="書き出し形式"
+							value={outputFormat}
+							onChange={setOutputFormat}
+							options={[
+								["png", "PNG"],
+								["gif", "GIF"],
+							]}
+						/>
+					)
+				}
+				downloadLabel={`${isAnimated ? outputFormat.toUpperCase() : "PNG"} ダウンロード`}
+				onDownload={handleDownload}
+				isBusy={isDownloading}
+				onSave={save.openSaveForm}
+			/>
 
-			{/* 保存ダイアログ */}
-			<Dialog open={showSaveForm} onOpenChange={setShowSaveForm}>
-				<DialogContent className="sm:max-w-md">
-					<DialogHeader>
-						<DialogTitle>マイ絵文字に保存</DialogTitle>
-					</DialogHeader>
-					<SaveEmojiForm
-						saveName={saveName}
-						onSaveNameChange={setSaveName}
-						savePublic={savePublic}
-						onSavePublicChange={setSavePublic}
-						onSubmit={handleSaveSubmit}
-						onCancel={() => setShowSaveForm(false)}
-						isSaving={isSaving}
-						busyLabel={isSavingGif ? "GIF生成中..." : undefined}
-					/>
-				</DialogContent>
-			</Dialog>
-
-			<LoginDialog
-				open={showLoginDialog}
-				onOpenChange={setShowLoginDialog}
-				onLogin={loginAndContinue}
+			<SaveDialogs
+				save={save}
+				onSubmit={handleSaveSubmit}
+				busyLabel={isSavingGif ? "GIF生成中..." : undefined}
 			/>
 		</div>
 	);

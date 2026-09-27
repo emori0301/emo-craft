@@ -133,6 +133,7 @@ export function Header() {
 						<Link
 							key={href}
 							href={href}
+							onClick={() => setMenuOpen(false)}
 							aria-current={isActive(href) ? "page" : undefined}
 							className={cn(
 								"rounded-md px-2 py-3 text-base font-medium transition-colors hover:bg-accent",

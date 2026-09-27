@@ -19,4 +19,9 @@ describe("rgbaToGrid", () => {
 		// 0 * 0.502 + 255 * 0.498 ≒ 127
 		expect(rgbaToGrid(data, 1)).toEqual([["#7f7f7f"]]);
 	});
+
+	it("blends with a custom background color", () => {
+		const data = new Uint8ClampedArray([255, 255, 255, 128, 0, 0, 0, 0]);
+		expect(rgbaToGrid(data, 1, "#000000")).toEqual([["#808080"]]);
+	});
 });

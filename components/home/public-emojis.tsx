@@ -20,9 +20,11 @@ type Emoji = {
 
 function EmojiDialog({
 	emoji,
+	open,
 	onClose,
 }: {
 	emoji: Emoji | null;
+	open: boolean;
 	onClose: () => void;
 }) {
 	const isGif = emoji?.imageMimeType === "image/gif";
@@ -45,7 +47,7 @@ function EmojiDialog({
 	}, [emoji, imageUrl, isGif]);
 
 	return (
-		<Dialog open={!!emoji} onOpenChange={(open) => !open && onClose()}>
+		<Dialog open={open && !!emoji} onOpenChange={(o) => !o && onClose()}>
 			<DialogContent className="max-w-xs">
 				{emoji && (
 					<div className="flex flex-col items-center gap-5 pt-2">
@@ -74,7 +76,9 @@ export function PublicEmojis() {
 		{ staleTime: 60 * 1000 },
 	);
 	const emojis = data?.items;
+	// 閉じるアニメーション中も中身を表示し続けるため、選択と開閉を分けて持つ
 	const [selected, setSelected] = useState<Emoji | null>(null);
+	const [dialogOpen, setDialogOpen] = useState(false);
 
 	if (isLoading) {
 		return (
@@ -101,7 +105,10 @@ export function PublicEmojis() {
 						<button
 							key={emoji.id}
 							type="button"
-							onClick={() => setSelected(emoji)}
+							onClick={() => {
+								setSelected(emoji);
+								setDialogOpen(true);
+							}}
 							className="flex flex-col items-center gap-1 p-2 rounded-lg border bg-background/80 hover:bg-muted/50 hover:border-primary/40 transition-all"
 							title={emoji.name}
 						>
@@ -118,7 +125,11 @@ export function PublicEmojis() {
 				</div>
 			</div>
 
-			<EmojiDialog emoji={selected} onClose={() => setSelected(null)} />
+			<EmojiDialog
+				emoji={selected}
+				open={dialogOpen}
+				onClose={() => setDialogOpen(false)}
+			/>
 		</>
 	);
 }

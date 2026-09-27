@@ -79,13 +79,16 @@ const toHex = (n: number) => n.toString(16).padStart(2, "0");
 
 /**
  * RGBA ピクセル列（gridSize × gridSize）をピクセルエディターのグリッドに変換する。
- * 透明に近いピクセルは背景色（白）として扱い、半透明は白と合成する。
+ * 透明に近いピクセルは背景色として扱い、半透明は背景色と合成する。
  */
 export function rgbaToGrid(
 	data: Uint8ClampedArray,
 	gridSize: number,
 	background = "#ffffff",
 ): string[][] {
+	const bg = /^#[0-9a-f]{6}$/i.test(background)
+		? [1, 3, 5].map((i) => Number.parseInt(background.slice(i, i + 2), 16))
+		: [255, 255, 255];
 	const grid: string[][] = [];
 	for (let row = 0; row < gridSize; row++) {
 		const line: string[] = [];
@@ -96,10 +99,10 @@ export function rgbaToGrid(
 				line.push(background);
 				continue;
 			}
-			// 白背景とアルファ合成
-			const blend = (c: number) => Math.round(c * a + 255 * (1 - a));
+			// 背景色とアルファ合成
+			const blend = (c: number, b: number) => Math.round(c * a + b * (1 - a));
 			line.push(
-				`#${toHex(blend(data[i]))}${toHex(blend(data[i + 1]))}${toHex(blend(data[i + 2]))}`,
+				`#${toHex(blend(data[i], bg[0]))}${toHex(blend(data[i + 1], bg[1]))}${toHex(blend(data[i + 2], bg[2]))}`,
 			);
 		}
 		grid.push(line);

@@ -194,8 +194,8 @@ export function TextEditor({
 	const [isAddingImages, setIsAddingImages] = useState(false);
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [mobileSection, setMobileSection] = useState<SettingsSection>("text");
-	/** Web フォントの読み込み完了で再描画するためのカウンタ */
-	const [fontsVersion, setFontsVersion] = useState(0);
+	/** Web フォント・画像の読み込み完了で再描画するためのカウンタ */
+	const [renderVersion, setRenderVersion] = useState(0);
 
 	/** 現在の文字色設定（保存・下書き用のシリアライズ値） */
 	const serializedTextColor = serializeTextColor(
@@ -353,7 +353,7 @@ export function TextEditor({
 	);
 
 	/** 背景 → 背面の画像 → 文字 → 前面の画像 の順に絵文字全体を描く */
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fontsVersion はフォント読み込み完了後に描き直すための依存
+	// biome-ignore lint/correctness/useExhaustiveDependencies: renderVersion はフォント・画像の読み込み完了後に描き直すための依存
 	const drawScene = useCallback(
 		(
 			ctx: CanvasRenderingContext2D,
@@ -403,7 +403,7 @@ export function TextEditor({
 			animateImages,
 			textTransform,
 			drawText,
-			fontsVersion,
+			renderVersion,
 		],
 	);
 
@@ -493,7 +493,7 @@ export function TextEditor({
 		if (typeof document === "undefined") return;
 		let cancelled = false;
 		const bump = () => {
-			if (!cancelled) setFontsVersion((v) => v + 1);
+			if (!cancelled) setRenderVersion((v) => v + 1);
 		};
 		Promise.allSettled(
 			["400", "700", "900"].map((w) =>
@@ -620,7 +620,14 @@ export function TextEditor({
 	const layersRef = useRef(layers);
 	layersRef.current = layers;
 
+	/** 読み込み中の多重実行（ドロップ + 貼り付けの同時発生など）を防ぐ */
+	const addingRef = useRef(false);
+
 	const addImageFiles = async (files: File[]) => {
+		if (addingRef.current) {
+			toast.info("画像を読み込み中です。少し待ってからもう一度お試しください");
+			return;
+		}
 		const room = MAX_IMAGE_LAYERS - layersRef.current.length;
 		if (room <= 0) {
 			toast.error(`画像は ${MAX_IMAGE_LAYERS} 枚まで追加できます`);
@@ -629,17 +636,20 @@ export function TextEditor({
 		if (files.length > room) {
 			toast.info(`画像は ${MAX_IMAGE_LAYERS} 枚までのため、一部のみ追加します`);
 		}
+		addingRef.current = true;
 		setIsAddingImages(true);
 		const added: ImageLayer[] = [];
 		try {
 			for (const file of files.slice(0, room)) {
 				try {
 					const loaded = await loadImageFile(file);
-					const img = await createImageElement(loaded.src);
-					const id = createId();
-					imagesRef.current.set(id, img);
 					added.push(
-						createImageLayer(id, loaded.src, loaded.width, loaded.height),
+						createImageLayer(
+							createId(),
+							loaded.src,
+							loaded.width,
+							loaded.height,
+						),
 					);
 				} catch (error) {
 					toast.error(
@@ -650,10 +660,13 @@ export function TextEditor({
 				}
 			}
 		} finally {
+			addingRef.current = false;
 			setIsAddingImages(false);
 		}
 		if (added.length === 0) return;
-		setLayers((prev) => [...prev, ...added]);
+		setLayers((prev) =>
+			[...prev, ...added].slice(0, Math.max(prev.length, MAX_IMAGE_LAYERS)),
+		);
 		setSelectedId(added[added.length - 1].id);
 		setMobileSection("image");
 	};
@@ -684,6 +697,34 @@ export function TextEditor({
 			},
 		});
 	};
+
+	// レイヤーと描画用の画像要素を同期する:
+	// 消えたレイヤーの画像は解放し、未読み込み（下書き復元・削除の取り消し）は読み込む
+	const pendingImagesRef = useRef(new Set<string>());
+	useEffect(() => {
+		const images = imagesRef.current;
+		const pending = pendingImagesRef.current;
+		const ids = new Set(layers.map((l) => l.id));
+		for (const id of images.keys()) {
+			if (!ids.has(id)) images.delete(id);
+		}
+		for (const layer of layers) {
+			if (images.has(layer.id) || pending.has(layer.id)) continue;
+			pending.add(layer.id);
+			createImageElement(layer.src)
+				.then((img) => {
+					pending.delete(layer.id);
+					if (!layersRef.current.some((l) => l.id === layer.id)) return;
+					images.set(layer.id, img);
+					setRenderVersion((v) => v + 1);
+				})
+				.catch(() => {
+					pending.delete(layer.id);
+					// 壊れた画像のレイヤーは捨てる
+					setLayers((prev) => prev.filter((l) => l.id !== layer.id));
+				});
+		}
+	}, [layers]);
 
 	/** 選択中の要素（文字 or 画像）の変形を更新する */
 	const transformTarget = useCallback(
@@ -771,7 +812,7 @@ export function TextEditor({
 		if (draft?.type === "TEXT") setAvailableDraft(draft);
 	}, [initialValues]);
 
-	const restoreDraft = async () => {
+	const restoreDraft = () => {
 		if (!availableDraft) return;
 		const draft = availableDraft;
 		setAvailableDraft(null);
@@ -788,16 +829,14 @@ export function TextEditor({
 		if (draft.textTransform) setTextTransform(draft.textTransform);
 		clearDraft();
 
-		const restored: ImageLayer[] = [];
-		for (const layer of draft.layers ?? []) {
-			try {
-				imagesRef.current.set(layer.id, await createImageElement(layer.src));
-				restored.push(layer);
-			} catch {
-				// 壊れた画像は捨てる
-			}
-		}
-		setLayers(restored);
+		// 画像要素の読み込みはレイヤー同期の effect に任せる
+		const restored = draft.layers ?? [];
+		setLayers((prev) =>
+			[
+				...restored,
+				...prev.filter((l) => !restored.some((r) => r.id === l.id)),
+			].slice(0, MAX_IMAGE_LAYERS),
+		);
 		toast.success("編集内容を復元しました");
 	};
 

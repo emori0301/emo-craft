@@ -30,6 +30,10 @@ describe("createImageLayer", () => {
 		// 高さ = scale * aspect = 0.8
 		expect(tall.scale * tall.aspect).toBeCloseTo(0.8);
 	});
+
+	it("never starts below the minimum scale", () => {
+		expect(createImageLayer("x", "data:", 10, 512).scale).toBe(0.05);
+	});
 });
 
 describe("hitTest", () => {

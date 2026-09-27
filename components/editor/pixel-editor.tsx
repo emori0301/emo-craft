@@ -1032,6 +1032,9 @@ export function PixelEditor({
 
 	const importInputRef = useRef<HTMLInputElement>(null);
 	const [isImporting, setIsImporting] = useState(false);
+	// 読み込みを待つ間に描画やサイズ変更があっても最新の状態に取り込むための ref
+	const latestRef = useRef({ frames, currentFrame, size });
+	latestRef.current = { frames, currentFrame, size };
 
 	/** 画像を現在のグリッドサイズでドット絵化し、現在のフレームに取り込む */
 	const importImage = async (file: File) => {
@@ -1039,8 +1042,11 @@ export function PixelEditor({
 		try {
 			const loaded = await loadImageFile(file);
 			const img = await createImageElement(loaded.src);
-			const grid = pixelateImage(img, size);
-			const newFrames = frames.map((f, i) => (i === currentFrame ? grid : f));
+			const latest = latestRef.current;
+			const grid = pixelateImage(img, latest.size);
+			const newFrames = latest.frames.map((f, i) =>
+				i === latest.currentFrame ? grid : f,
+			);
 			setFrames(newFrames);
 			saveToHistory(newFrames);
 			toast.success("画像をドット絵に変換しました（元に戻すで取り消せます）");

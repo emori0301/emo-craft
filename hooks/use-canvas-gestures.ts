@@ -247,7 +247,10 @@ export function useCanvasGestures(options: CanvasGestureOptions) {
 				e.currentTarget.releasePointerCapture(e.pointerId);
 			}
 			const g = gesture.current;
-			if (pointers.current.size === 1 && g?.kind === "pinch") {
+			if (pointers.current.size >= 2 && g?.kind === "pinch") {
+				// 3本目の指が離れた場合などは、残った2本で基準を取り直す
+				startPinch(g.id);
+			} else if (pointers.current.size === 1 && g?.kind === "pinch") {
 				// ピンチの片方の指を離したら、残った指でのドラッグに切り替える
 				const [rest] = [...pointers.current.values()];
 				startDrag(g.id, rest);
@@ -256,7 +259,7 @@ export function useCanvasGestures(options: CanvasGestureOptions) {
 				gesture.current = null;
 			}
 		},
-		[startDrag, setInteracting],
+		[startDrag, startPinch, setInteracting],
 	);
 
 	// ホイールで拡大縮小（React の onWheel は passive なので直接登録）

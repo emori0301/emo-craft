@@ -78,7 +78,8 @@ export function createImageLayer(
 		aspect,
 		x: 0.5,
 		y: 0.5,
-		scale: aspect > 1 ? fit / aspect : fit,
+		// 極端に縦長な画像でもスライダーの下限を割らないようにする
+		scale: Math.max(SCALE_LIMITS.min, aspect > 1 ? fit / aspect : fit),
 		rotation: 0,
 		flipX: false,
 		opacity: 1,

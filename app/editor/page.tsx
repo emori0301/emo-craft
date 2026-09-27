@@ -87,7 +87,7 @@ function EditorContent() {
 							</TabsList>
 							{editId && (
 								<p className="text-sm text-muted-foreground">
-									保存済みの絵文字を編集中（保存すると新しい絵文字として追加されます）
+									保存済みの絵文字を編集中（文字の設定のみ復元されます。保存すると新しい絵文字として追加されます）
 								</p>
 							)}
 						</div>

@@ -92,6 +92,8 @@ interface TextEditorProps {
 const RENDER_SCALE = 4;
 /** プレビュー・書き出し前の描画解像度 */
 const RENDER_SIZE = EXPORT_SIZE * RENDER_SCALE;
+/** 文字の当たり判定で字面から許容する距離（CSS px） */
+const TEXT_HIT_TOLERANCE = 8;
 /** 選択枠の色（ブランドのバイオレット） */
 const SELECTION_COLOR = "#8b5cf6";
 
@@ -766,6 +768,48 @@ export function TextEditor({
 		if (id) setMobileSection(id === TEXT_TARGET ? "text" : "image");
 	}, []);
 
+	// 文字だけを静止状態で描いたマスク。当たり判定を字面で行い、
+	// 字の隙間から「文字の後ろ」の画像を選べるようにする
+	const textMaskRef = useRef<CanvasRenderingContext2D | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: renderVersion はフォント読み込み完了後に描き直すための依存
+	useEffect(() => {
+		if (!textMaskRef.current) {
+			const canvas = document.createElement("canvas");
+			canvas.width = canvas.height = RENDER_SIZE;
+			textMaskRef.current = canvas.getContext("2d", {
+				willReadFrequently: true,
+			});
+		}
+		const ctx = textMaskRef.current;
+		if (!ctx) return;
+		ctx.clearRect(0, 0, RENDER_SIZE, RENDER_SIZE);
+		withTransform(ctx, RENDER_SIZE, textTransform, () => {
+			ctx.scale(textTransform.scale, textTransform.scale);
+			ctx.translate(-RENDER_SIZE / 2, -RENDER_SIZE / 2);
+			drawText(ctx, RENDER_SIZE, AP0);
+		});
+	}, [drawText, textTransform, renderVersion]);
+
+	/** (x, y) の周囲（指先の太さ程度）に文字の字面があるか */
+	const isOnTextGlyph = (x: number, y: number): boolean => {
+		const ctx = textMaskRef.current;
+		if (!ctx) return true;
+		const r = Math.max(
+			4,
+			Math.round(TEXT_HIT_TOLERANCE * displayRatioRef.current),
+		);
+		const x0 = Math.max(0, Math.round(x) - r);
+		const y0 = Math.max(0, Math.round(y) - r);
+		const w = Math.min(RENDER_SIZE, Math.round(x) + r) - x0;
+		const h = Math.min(RENDER_SIZE, Math.round(y) + r) - y0;
+		if (w <= 0 || h <= 0) return false;
+		const { data } = ctx.getImageData(x0, y0, w, h);
+		for (let i = 3; i < data.length; i += 4) {
+			if (data[i] > 16) return true;
+		}
+		return false;
+	};
+
 	const textHitTransform = hasText ? textTransform : null;
 	const gestures = useCanvasGestures({
 		canvasRef,
@@ -775,7 +819,11 @@ export function TextEditor({
 			id === TEXT_TARGET
 				? textTransform
 				: (layers.find((l) => l.id === id) ?? null),
-		findAt: (x, y) => findTargetAt(layers, textHitTransform, x, y, RENDER_SIZE),
+		findAt: (x, y) =>
+			findTargetAt(layers, textHitTransform, x, y, RENDER_SIZE, {
+				textHit: isOnTextGlyph,
+				preferId: selectedId,
+			}),
 		getScaleLimits: (id) =>
 			id === TEXT_TARGET ? TEXT_SCALE_LIMITS : SCALE_LIMITS,
 		onSelect: selectTarget,

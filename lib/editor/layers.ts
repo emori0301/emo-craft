@@ -166,6 +166,16 @@ export function layersInDrawOrder(layers: ImageLayer[]): {
 	};
 }
 
+export type FindTargetOptions = {
+	/**
+	 * 文字の実際の形（字面）に当たっているか。文字ボックスは既定で全面を覆うため、
+	 * 指定すると字の隙間から後ろの画像を選べるようになる。
+	 */
+	textHit?: (px: number, py: number) => boolean;
+	/** 選択中の要素。ボックス内なら他の要素より優先する（重なっていても掴み直せる） */
+	preferId?: string | null;
+};
+
 /**
  * 指定位置で一番手前にある要素を返す（前面の画像 → 文字 → 背面の画像の順に判定）。
  * 文字ボックスは textTransform が null（文字なし）のときは対象外。
@@ -176,12 +186,22 @@ export function findTargetAt(
 	px: number,
 	py: number,
 	size: number,
+	{ textHit, preferId }: FindTargetOptions = {},
 ): string | null {
+	const isTextAt = () =>
+		!!textTransform &&
+		hitTest(textTransform, px, py, size) &&
+		(textHit ? textHit(px, py) : true);
+
+	if (preferId === TEXT_TARGET && isTextAt()) return TEXT_TARGET;
+	const preferred = layers.find((l) => l.id === preferId);
+	if (preferred && hitTest(preferred, px, py, size)) return preferred.id;
+
 	const { behind, front } = layersInDrawOrder(layers);
 	for (const layer of [...front].reverse()) {
 		if (hitTest(layer, px, py, size)) return layer.id;
 	}
-	if (textTransform && hitTest(textTransform, px, py, size)) return TEXT_TARGET;
+	if (isTextAt()) return TEXT_TARGET;
 	for (const layer of [...behind].reverse()) {
 		if (hitTest(layer, px, py, size)) return layer.id;
 	}

@@ -87,6 +87,36 @@ describe("findTargetAt", () => {
 		expect(findTargetAt(layers, null, 20, 20, SIZE)).toBe("back");
 		expect(findTargetAt([], null, 20, 20, SIZE)).toBeNull();
 	});
+
+	it("uses the text shape so images behind the text can be picked", () => {
+		const back = layer({ id: "back", scale: 1, behindText: true });
+		const onGlyph = (x: number) => x < 100;
+		const opts = { textHit: (x: number) => onGlyph(x) };
+		expect(
+			findTargetAt([back], DEFAULT_TEXT_TRANSFORM, 50, 50, SIZE, opts),
+		).toBe(TEXT_TARGET);
+		expect(
+			findTargetAt([back], DEFAULT_TEXT_TRANSFORM, 300, 300, SIZE, opts),
+		).toBe("back");
+		expect(findTargetAt([], DEFAULT_TEXT_TRANSFORM, 300, 300, SIZE, opts)).toBe(
+			null,
+		);
+	});
+
+	it("prefers the selected element when it contains the point", () => {
+		const back = layer({ id: "back", scale: 1, behindText: true });
+		const front = layer({ id: "front", scale: 0.2 });
+		expect(
+			findTargetAt([back, front], DEFAULT_TEXT_TRANSFORM, 256, 256, SIZE, {
+				preferId: "back",
+			}),
+		).toBe("back");
+		expect(
+			findTargetAt([back], DEFAULT_TEXT_TRANSFORM, 256, 256, SIZE, {
+				preferId: TEXT_TARGET,
+			}),
+		).toBe(TEXT_TARGET);
+	});
 });
 
 describe("moveLayer", () => {

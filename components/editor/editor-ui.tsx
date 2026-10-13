@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import type { useSaveEmoji } from "@/hooks/use-save-emoji";
 import { SLACK_EMOJI_MAX_BYTES } from "@/lib/editor/constants";
+import { dataUrlByteSize } from "@/lib/editor/gif";
 import { cn } from "@/lib/utils";
 
 /** テキスト / ピクセル両エディター共通の小さな UI 部品 */
@@ -310,11 +311,11 @@ export function isTypingTarget(target: EventTarget | null): boolean {
  * 書き出した画像が Slack の容量上限（128KB）に収まったかを知らせる。
  * 収めるために品質を落とした場合と、それでも超えている場合だけ通知する。
  */
-export function reportSlackSize(result: {
-	bytes: number;
-	reduced?: boolean;
-	overLimit?: boolean;
-}) {
+export function reportSlackSize(
+	result: string | { bytes: number; reduced?: boolean; overLimit?: boolean },
+) {
+	// data URL を渡したときはサイズだけで判定する（PNG 用）
+	if (typeof result === "string") result = { bytes: dataUrlByteSize(result) };
 	const kb = Math.ceil(result.bytes / 1024);
 	const limitKb = SLACK_EMOJI_MAX_BYTES / 1024;
 	if (result.overLimit ?? result.bytes > SLACK_EMOJI_MAX_BYTES) {

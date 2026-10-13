@@ -69,11 +69,7 @@ import {
 	loadDraft,
 	type PixelEditorDraft,
 } from "@/lib/editor/draft";
-import {
-	dataUrlByteSize,
-	encodeGifWithinLimit,
-	type GifFrame,
-} from "@/lib/editor/gif";
+import { encodeGifWithinLimit, type GifFrame } from "@/lib/editor/gif";
 import {
 	createImageElement,
 	ImageFileError,
@@ -503,14 +499,17 @@ export function PixelEditor({
 		[size],
 	);
 
-	/** クリック位置の色を拾って描画色にする（スポイト / Alt+クリック） */
+	/**
+	 * クリック位置の色を拾って描画色にする（スポイト / Alt+クリック）。
+	 * スポイトツールで透明なセルを拾ったときだけ消しゴムに切り替える
+	 * （Alt+クリックは一時的な色取りなのでツールは変えない）。
+	 */
 	const pickColorAt = useCallback(
-		(row: number, col: number) => {
+		(row: number, col: number, switchToEraser: boolean) => {
 			const picked = frames[currentFrame]?.[row]?.[col];
 			if (!picked) return;
-			// 透明なセルを拾ったら消しゴムに切り替える
 			if (isTransparent(picked)) {
-				setActiveTool("eraser");
+				if (switchToEraser) setActiveTool("eraser");
 				return;
 			}
 			setDrawColor(picked);
@@ -529,7 +528,7 @@ export function PixelEditor({
 
 			// Alt+クリックはツールに関わらずその場でスポイト
 			if (e.altKey || activeTool === "eyedropper") {
-				pickColorAt(row, col);
+				pickColorAt(row, col, activeTool === "eyedropper");
 				// スポイトツールで拾ったらペンに戻す（すぐ描ける）
 				if (activeTool === "eyedropper")
 					setActiveTool((t) => (t === "eraser" ? t : "pencil"));
@@ -963,7 +962,7 @@ export function PixelEditor({
 
 	const downloadPng = useCallback(() => {
 		const png = getImageData();
-		reportSlackSize({ bytes: dataUrlByteSize(png) });
+		reportSlackSize(png);
 		downloadDataUrl(png, `emoji_pixel_${Date.now()}.png`);
 	}, [getImageData]);
 
@@ -1015,6 +1014,7 @@ export function PixelEditor({
 			frames,
 			canvasSize: size,
 			frameDelay,
+			outputFormat,
 			savedAt: Date.now(),
 		}),
 	});
@@ -1037,6 +1037,8 @@ export function PixelEditor({
 		setFrameIds(restored.map(() => createId()));
 		setCurrentFrame(0);
 		setFrameDelay(availableDraft.frameDelay);
+		if (availableDraft.outputFormat)
+			setOutputFormat(availableDraft.outputFormat);
 		setHistory({
 			stack: [restored.map((f) => f.map((row) => [...row]))],
 			index: 0,
@@ -1062,7 +1064,7 @@ export function PixelEditor({
 			}
 		} else {
 			imageData = getImageData();
-			reportSlackSize({ bytes: dataUrlByteSize(imageData) });
+			reportSlackSize(imageData);
 		}
 		save.submitSave({
 			editorType: "PIXEL",

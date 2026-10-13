@@ -16,14 +16,27 @@ const pixelGridSchema = z
 	.min(1)
 	.max(MAX_PIXEL_GRID);
 
+/** 正方形で、全フレームが同じ大きさか（エディターが読み込める形か） */
+const isSquareFrames = (frames: string[][][]) => {
+	const size = frames[0].length;
+	return frames.every(
+		(f) => f.length === size && f.every((row) => row.length === size),
+	);
+};
+
 /** 旧形式（1フレーム）と新形式（全フレーム + 間隔）の両方を受け付ける */
-const pixelDataSchema = z.union([
-	pixelGridSchema,
-	z.object({
-		frames: z.array(pixelGridSchema).min(1).max(MAX_PIXEL_FRAMES),
-		frameDelay: z.number().int().min(20).max(5000),
-	}),
-]);
+const pixelDataSchema = z
+	.union([
+		pixelGridSchema,
+		z.object({
+			frames: z.array(pixelGridSchema).min(1).max(MAX_PIXEL_FRAMES),
+			frameDelay: z.number().int().min(20).max(5000),
+		}),
+	])
+	.refine(
+		(v) => isSquareFrames(Array.isArray(v) ? [v] : v.frames),
+		"ドット絵のデータが正しくありません",
+	);
 
 /** 一覧・作成結果で返す公開フィールド（imageData / pixelData / userId は返さない） */
 const listSelect = {

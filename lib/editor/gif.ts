@@ -95,16 +95,16 @@ export async function encodeGifToDataUrl(
 			!!options.transparent,
 			maxColors,
 		);
+		// 透過 GIF では全フレームで「次のフレームの前に消す」(dispose: 2) を指定する。
+		// 指定しないと、透明なセルから前のフレームの絵が透けて残像になる
+		const disposal = options.transparent ? { dispose: 2 } : {};
 		if (exact) {
 			gif.writeFrame(exact.index, width, height, {
 				palette: exact.palette,
 				delay,
+				...disposal,
 				...(exact.transparentIndex >= 0
-					? {
-							transparent: true,
-							transparentIndex: exact.transparentIndex,
-							dispose: 2,
-						}
+					? { transparent: true, transparentIndex: exact.transparentIndex }
 					: {}),
 			});
 		} else if (options.transparent) {
@@ -119,8 +119,9 @@ export async function encodeGifToDataUrl(
 			gif.writeFrame(index, width, height, {
 				palette,
 				delay,
+				...disposal,
 				...(transparentIndex >= 0
-					? { transparent: true, transparentIndex, dispose: 2 }
+					? { transparent: true, transparentIndex }
 					: {}),
 			});
 		} else {

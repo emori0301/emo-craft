@@ -35,11 +35,7 @@ import {
 	loadDraft,
 	type TextEditorDraft,
 } from "@/lib/editor/draft";
-import {
-	dataUrlByteSize,
-	encodeGifWithinLimit,
-	type GifFrame,
-} from "@/lib/editor/gif";
+import { encodeGifWithinLimit, type GifFrame } from "@/lib/editor/gif";
 import {
 	createImageElement,
 	ImageFileError,
@@ -628,7 +624,7 @@ export function TextEditor({
 	const buildImage = async (): Promise<string | null> => {
 		if (!animationType) {
 			const png = getImageData();
-			if (png) reportSlackSize({ bytes: dataUrlByteSize(png) });
+			if (png) reportSlackSize(png);
 			return png;
 		}
 		setIsGeneratingGif(true);

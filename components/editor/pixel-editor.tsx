@@ -32,6 +32,7 @@ import {
 	SectionLabel,
 	SegmentedControl,
 } from "@/components/editor/editor-ui";
+import { PixelImportDialog } from "@/components/editor/pixel-import-dialog";
 import {
 	ShortcutHelp,
 	type ShortcutItem,
@@ -70,7 +71,6 @@ import {
 	createImageElement,
 	ImageFileError,
 	loadImageFile,
-	pixelateImage,
 } from "@/lib/editor/image-file";
 import {
 	type Cell,
@@ -1036,20 +1036,17 @@ export function PixelEditor({
 	const latestRef = useRef({ frames, currentFrame, size });
 	latestRef.current = { frames, currentFrame, size };
 
-	/** 画像を現在のグリッドサイズでドット絵化し、現在のフレームに取り込む */
+	/** 変換設定ダイアログに渡す、読み込み済みの画像 */
+	const [importSource, setImportSource] = useState<HTMLImageElement | null>(
+		null,
+	);
+
+	/** 画像を読み込み、変換設定ダイアログを開く */
 	const importImage = async (file: File) => {
 		setIsImporting(true);
 		try {
 			const loaded = await loadImageFile(file);
-			const img = await createImageElement(loaded.src);
-			const latest = latestRef.current;
-			const grid = pixelateImage(img, latest.size);
-			const newFrames = latest.frames.map((f, i) =>
-				i === latest.currentFrame ? grid : f,
-			);
-			setFrames(newFrames);
-			saveToHistory(newFrames);
-			toast.success("画像をドット絵に変換しました（元に戻すで取り消せます）");
+			setImportSource(await createImageElement(loaded.src));
 		} catch (error) {
 			toast.error(
 				error instanceof ImageFileError
@@ -1059,6 +1056,22 @@ export function PixelEditor({
 		} finally {
 			setIsImporting(false);
 		}
+	};
+
+	/** ダイアログで確定したグリッドを、いま選んでいるフレームに取り込む */
+	const applyImportedGrid = (grid: string[][]) => {
+		setImportSource(null);
+		const latest = latestRef.current;
+		if (grid.length !== latest.size) {
+			toast.error("キャンバスサイズが変わったため取り込めませんでした");
+			return;
+		}
+		const newFrames = latest.frames.map((f, i) =>
+			i === latest.currentFrame ? grid : f,
+		);
+		setFrames(newFrames);
+		saveToHistory(newFrames);
+		toast.success("画像をドット絵に変換しました（元に戻すで取り消せます）");
 	};
 
 	const pickColor = (color: string) => {
@@ -1458,6 +1471,13 @@ export function PixelEditor({
 				onDownload={handleDownload}
 				isBusy={isDownloading}
 				onSave={save.openSaveForm}
+			/>
+
+			<PixelImportDialog
+				image={importSource}
+				gridSize={size}
+				onCancel={() => setImportSource(null)}
+				onConfirm={applyImportedGrid}
 			/>
 
 			<SaveDialogs

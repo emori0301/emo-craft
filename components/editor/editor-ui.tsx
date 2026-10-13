@@ -1,6 +1,7 @@
 "use client";
 
 import { Download, Loader2, Save } from "lucide-react";
+import { toast } from "sonner";
 import { LoginDialog } from "@/components/editor/login-dialog";
 import { SaveEmojiForm } from "@/components/editor/save-emoji-form";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import type { useSaveEmoji } from "@/hooks/use-save-emoji";
+import { SLACK_EMOJI_MAX_BYTES } from "@/lib/editor/constants";
 import { cn } from "@/lib/utils";
 
 /** テキスト / ピクセル両エディター共通の小さな UI 部品 */
@@ -302,4 +304,26 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 		target instanceof HTMLSelectElement ||
 		(target instanceof HTMLElement && target.isContentEditable)
 	);
+}
+
+/**
+ * 書き出した画像が Slack の容量上限（128KB）に収まったかを知らせる。
+ * 収めるために品質を落とした場合と、それでも超えている場合だけ通知する。
+ */
+export function reportSlackSize(result: {
+	bytes: number;
+	reduced?: boolean;
+	overLimit?: boolean;
+}) {
+	const kb = Math.ceil(result.bytes / 1024);
+	const limitKb = SLACK_EMOJI_MAX_BYTES / 1024;
+	if (result.overLimit ?? result.bytes > SLACK_EMOJI_MAX_BYTES) {
+		toast.warning(
+			`ファイルサイズが ${kb}KB あり、Slack の上限（${limitKb}KB）を超えています。画像の枚数や動きを減らすと収まります`,
+		);
+	} else if (result.reduced) {
+		toast.info(
+			`Slack の上限（${limitKb}KB）に収めるため、色数やコマ数を減らしました（${kb}KB）`,
+		);
+	}
 }

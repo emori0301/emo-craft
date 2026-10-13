@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TRANSPARENT } from "../pixel/pixel-data";
 import { pixelateRgba, quantize } from "./pixelate";
 
 /** 一辺 size の RGBA 画像を (x, y) => [r,g,b,a] から作る */
@@ -22,32 +23,69 @@ describe("pixelateRgba", () => {
 	it("keeps a thin dark line pure black instead of a blurred gray (crisp)", () => {
 		// 2x2 グリッド・1セル 4px。左列のセルに幅 1px の黒線（セルの 25%）
 		const data = image(8, (x) => (x === 1 ? BLACK : WHITE));
-		const crisp = pixelateRgba(data, 2, 4, { mode: "crisp", colors: null });
+		const crisp = pixelateRgba(data, 2, 4, {
+			mode: "crisp",
+			colors: null,
+			transparentBackground: false,
+		});
 		expect(crisp).toEqual([
 			["#000000", "#ffffff"],
 			["#000000", "#ffffff"],
 		]);
 		// なめらかは平均なので灰色になる
-		const smooth = pixelateRgba(data, 2, 4, { mode: "smooth", colors: null });
+		const smooth = pixelateRgba(data, 2, 4, {
+			mode: "smooth",
+			colors: null,
+			transparentBackground: false,
+		});
 		expect(smooth[0][0]).toBe("#bfbfbf");
 	});
 
 	it("ignores tiny specks below the ink ratio", () => {
 		// 16px 中 1px だけ黒 → 白
 		const data = image(4, (x, y) => (x === 0 && y === 0 ? BLACK : WHITE));
-		expect(pixelateRgba(data, 1, 4, { mode: "crisp", colors: null })).toEqual([
-			["#ffffff"],
-		]);
+		expect(
+			pixelateRgba(data, 1, 4, {
+				mode: "crisp",
+				colors: null,
+				transparentBackground: false,
+			}),
+		).toEqual([["#ffffff"]]);
 	});
 
-	it("treats transparent pixels as white background", () => {
+	it("keeps transparent source pixels transparent", () => {
 		const data = image(2, () => [0, 0, 0, 0]);
-		expect(pixelateRgba(data, 1, 2, { mode: "crisp", colors: null })).toEqual([
-			["#ffffff"],
-		]);
-		expect(pixelateRgba(data, 1, 2, { mode: "smooth", colors: null })).toEqual([
-			["#ffffff"],
-		]);
+		for (const mode of ["crisp", "smooth"] as const) {
+			expect(
+				pixelateRgba(data, 1, 2, {
+					mode,
+					colors: null,
+					transparentBackground: false,
+				}),
+			).toEqual([[TRANSPARENT]]);
+		}
+	});
+
+	it("turns the white background transparent when requested", () => {
+		// 左のセルに黒線、右のセルは白
+		const data = image(8, (x) => (x === 1 ? BLACK : WHITE));
+		for (const mode of ["crisp", "smooth"] as const) {
+			const grid = pixelateRgba(data, 2, 4, {
+				mode,
+				colors: null,
+				transparentBackground: true,
+			});
+			expect(grid[0][1]).toBe(TRANSPARENT);
+			expect(grid[0][0]).not.toBe(TRANSPARENT);
+		}
+		// 指定しなければ白のまま
+		expect(
+			pixelateRgba(data, 2, 4, {
+				mode: "crisp",
+				colors: null,
+				transparentBackground: false,
+			})[0][1],
+		).toBe("#ffffff");
 	});
 
 	it("limits the number of colors", () => {
@@ -58,7 +96,11 @@ describe("pixelateRgba", () => {
 			return [v, v, v, 255];
 		});
 		const colors = new Set(
-			pixelateRgba(data, 4, 1, { mode: "smooth", colors: 2 }).flat(),
+			pixelateRgba(data, 4, 1, {
+				mode: "smooth",
+				colors: 2,
+				transparentBackground: false,
+			}).flat(),
 		);
 		expect(colors.size).toBe(2);
 		expect(colors.has("#ffffff")).toBe(true);

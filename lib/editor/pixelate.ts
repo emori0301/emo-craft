@@ -6,7 +6,10 @@
  * - くっきり: セル内に「インク」（背景の白から離れた色）が一定以上あればその色だけを平均する
  * - なめらか: セル内の全ピクセルを平均する（写真向け）
  * で色を決め、さらに色数を絞って中間色を減らす。
+ * 元画像の透明部分は透明のまま、白い背景も（指定すれば）透明にする。
  */
+
+import { TRANSPARENT } from "../pixel/pixel-data";
 
 export type PixelateMode = "crisp" | "smooth";
 
@@ -14,11 +17,14 @@ export type PixelateOptions = {
 	mode: PixelateMode;
 	/** 使う色の最大数。null なら制限しない */
 	colors: number | null;
+	/** 白い背景を透明にする（Slack のダークモードで白い四角にならないように） */
+	transparentBackground: boolean;
 };
 
 export const DEFAULT_PIXELATE_OPTIONS: PixelateOptions = {
 	mode: "crisp",
 	colors: 8,
+	transparentBackground: true,
 };
 
 /** 1セルあたりのサンプリング数（一辺） */
@@ -28,6 +34,8 @@ export const SAMPLES_PER_CELL = 8;
 const INK_THRESHOLD = 48;
 /** セル内のインクの割合がこれ以上ならインクの色で塗る（細い線を残すため低め） */
 const INK_RATIO = 0.15;
+/** なめらか変換で、これ以上白に近いセルを背景（透明）とみなす */
+const NEAR_WHITE = 245;
 
 type RGB = [number, number, number];
 
@@ -51,17 +59,20 @@ export function pixelateRgba(
 	options: PixelateOptions = DEFAULT_PIXELATE_OPTIONS,
 ): string[][] {
 	const width = gridSize * scale;
-	const cells: RGB[] = [];
+	/** null は透明なセル */
+	const cells: (RGB | null)[] = [];
 
 	for (let row = 0; row < gridSize; row++) {
 		for (let col = 0; col < gridSize; col++) {
 			const all: RGB = [0, 0, 0];
 			const ink: RGB = [0, 0, 0];
 			let inkCount = 0;
+			let alphaSum = 0;
 			for (let y = 0; y < scale; y++) {
 				for (let x = 0; x < scale; x++) {
 					const i = ((row * scale + y) * width + col * scale + x) * 4;
 					const a = data[i + 3] / 255;
+					alphaSum += a;
 					// 白背景と合成した色
 					const c: RGB = [
 						data[i] * a + 255 * (1 - a),
@@ -85,25 +96,35 @@ export function pixelateRgba(
 				}
 			}
 			const n = scale * scale;
+			// 元画像でほぼ透明なセルは透明のまま
+			const isClear = alphaSum / n < 0.5;
 			if (options.mode === "crisp") {
-				cells.push(
-					inkCount / n >= INK_RATIO
-						? [ink[0] / inkCount, ink[1] / inkCount, ink[2] / inkCount]
-						: [...BACKGROUND],
-				);
+				if (inkCount / n >= INK_RATIO) {
+					cells.push([ink[0] / inkCount, ink[1] / inkCount, ink[2] / inkCount]);
+				} else {
+					cells.push(
+						isClear || options.transparentBackground ? null : [...BACKGROUND],
+					);
+				}
 			} else {
-				cells.push([all[0] / n, all[1] / n, all[2] / n]);
+				const avg: RGB = [all[0] / n, all[1] / n, all[2] / n];
+				const isWhite = Math.min(...avg) >= NEAR_WHITE;
+				cells.push(
+					isClear || (options.transparentBackground && isWhite) ? null : avg,
+				);
 			}
 		}
 	}
 
-	const palette = options.colors ? quantize(cells, options.colors) : null;
+	const opaque = cells.filter((c): c is RGB => c !== null);
+	const palette = options.colors ? quantize(opaque, options.colors) : null;
 	const grid: string[][] = [];
 	for (let row = 0; row < gridSize; row++) {
 		const line: string[] = [];
 		for (let col = 0; col < gridSize; col++) {
 			const c = cells[row * gridSize + col];
-			line.push(rgbToHex(palette ? nearest(palette, c) : c));
+			if (!c) line.push(TRANSPARENT);
+			else line.push(rgbToHex(palette ? nearest(palette, c) : c));
 		}
 		grid.push(line);
 	}

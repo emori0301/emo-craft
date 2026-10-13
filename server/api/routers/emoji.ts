@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { MAX_PIXEL_FRAMES, MAX_PIXEL_GRID } from "@/lib/pixel/pixel-data";
 import { prisma } from "@/lib/prisma";
 import { protectedProcedure, publicProcedure, router } from "../trpc";
 
@@ -8,6 +9,21 @@ const MAX_IMAGE_BYTES = 1_500_000;
 
 /** 1ユーザーあたりの保存数上限（ストレージ悪用対策） */
 const MAX_EMOJIS_PER_USER = 100;
+
+/** ドット絵の1フレーム（最大 64×64、色は "#rrggbb" か "transparent"） */
+const pixelGridSchema = z
+	.array(z.array(z.string().max(16)).max(MAX_PIXEL_GRID))
+	.min(1)
+	.max(MAX_PIXEL_GRID);
+
+/** 旧形式（1フレーム）と新形式（全フレーム + 間隔）の両方を受け付ける */
+const pixelDataSchema = z.union([
+	pixelGridSchema,
+	z.object({
+		frames: z.array(pixelGridSchema).min(1).max(MAX_PIXEL_FRAMES),
+		frameDelay: z.number().int().min(20).max(5000),
+	}),
+]);
 
 /** 一覧・作成結果で返す公開フィールド（imageData / pixelData / userId は返さない） */
 const listSelect = {
@@ -75,7 +91,7 @@ export const emojiRouter = router({
 				fontFamily: z.string().optional(),
 				textColor: z.string().optional(),
 				backgroundColor: z.string().optional(),
-				pixelData: z.array(z.array(z.string())).optional(),
+				pixelData: pixelDataSchema.optional(),
 				pixelCanvasSize: z.number().optional(),
 			}),
 		)

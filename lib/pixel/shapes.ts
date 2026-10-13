@@ -3,6 +3,8 @@
  * 座標は [row, col]。グリッド境界のクリップは呼び出し側で行う。
  */
 
+import { TRANSPARENT } from "./pixel-data";
+
 export type Cell = [row: number, col: number];
 
 /** Bresenham の直線 */
@@ -171,8 +173,9 @@ export function floodFill(
 }
 
 /** size×size の白紙グリッドを作る */
+/** 全セル透明のグリッド */
 export function createEmptyGrid(size: number): string[][] {
 	return Array(size)
 		.fill(null)
-		.map(() => Array(size).fill("#ffffff"));
+		.map(() => Array(size).fill(TRANSPARENT));
 }

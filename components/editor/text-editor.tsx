@@ -10,6 +10,7 @@ import {
 	DraftBanner,
 	EditorActionBar,
 	isTypingTarget,
+	reportSlackSize,
 	SaveDialogs,
 	SectionLabel,
 	SegmentedControl,
@@ -27,14 +28,18 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { HANDLE_MARGIN, useCanvasGestures } from "@/hooks/use-canvas-gestures";
 import { useSaveEmoji } from "@/hooks/use-save-emoji";
-import { EXPORT_SIZE } from "@/lib/editor/constants";
+import { EXPORT_SIZE, SLACK_EMOJI_MAX_BYTES } from "@/lib/editor/constants";
 import { downloadDataUrl } from "@/lib/editor/download";
 import {
 	clearDraft,
 	loadDraft,
 	type TextEditorDraft,
 } from "@/lib/editor/draft";
-import { encodeGifToDataUrl, type GifFrame } from "@/lib/editor/gif";
+import {
+	dataUrlByteSize,
+	encodeGifWithinLimit,
+	type GifFrame,
+} from "@/lib/editor/gif";
 import {
 	createImageElement,
 	ImageFileError,
@@ -602,9 +607,15 @@ export function TextEditor({
 				delay: config.delay,
 			});
 		}
-		return encodeGifToDataUrl(gifFrames, EXPORT_SIZE, EXPORT_SIZE, {
-			transparent: isTransparent,
-		});
+		const fitted = await encodeGifWithinLimit(
+			gifFrames,
+			EXPORT_SIZE,
+			EXPORT_SIZE,
+			SLACK_EMOJI_MAX_BYTES,
+			{ transparent: isTransparent },
+		);
+		reportSlackSize(fitted);
+		return fitted.dataUrl;
 	}, [animationType, createFrameRenderer, isTransparent]);
 
 	// アニメーション中でも静止状態で書き出すため、プレビューではなく直接描画する
@@ -615,7 +626,11 @@ export function TextEditor({
 
 	/** 書き出し用の画像（アニメーションありなら GIF）を作る */
 	const buildImage = async (): Promise<string | null> => {
-		if (!animationType) return getImageData();
+		if (!animationType) {
+			const png = getImageData();
+			if (png) reportSlackSize({ bytes: dataUrlByteSize(png) });
+			return png;
+		}
 		setIsGeneratingGif(true);
 		try {
 			return await buildGifDataUrl();

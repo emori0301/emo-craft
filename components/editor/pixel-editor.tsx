@@ -24,10 +24,13 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+	CHECKER_SMALL_STYLE,
+	CHECKER_STYLE,
 	COLOR_PRESETS,
 	DraftBanner,
 	EditorActionBar,
 	isTypingTarget,
+	reportSlackSize,
 	SaveDialogs,
 	SectionLabel,
 	SegmentedControl,
@@ -59,14 +62,14 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useSaveEmoji } from "@/hooks/use-save-emoji";
-import { EXPORT_SIZE } from "@/lib/editor/constants";
+import { EXPORT_SIZE, SLACK_EMOJI_MAX_BYTES } from "@/lib/editor/constants";
 import { downloadDataUrl } from "@/lib/editor/download";
 import {
 	clearDraft,
 	loadDraft,
 	type PixelEditorDraft,
 } from "@/lib/editor/draft";
-import { encodeGifToDataUrl, type GifFrame } from "@/lib/editor/gif";
+import { encodeGifWithinLimit, type GifFrame } from "@/lib/editor/gif";
 import {
 	createImageElement,
 	ImageFileError,
@@ -81,10 +84,17 @@ import {
 	plotRect,
 	plotTriangle,
 } from "@/lib/pixel/shapes";
+import {
+	DEFAULT_FRAME_DELAY,
+	hasTransparentCell,
+	isTransparent,
+	MAX_PIXEL_FRAMES,
+	TRANSPARENT,
+} from "@/lib/pixel/pixel-data";
 import { cn, createId } from "@/lib/utils";
 
 const FIXED_DISPLAY_SIZE = 512;
-const MAX_FRAMES = 8;
+const MAX_FRAMES = MAX_PIXEL_FRAMES;
 
 /** キャンバスの表示基準サイズ（ズーム 100% 時） */
 const BASE_DISPLAY_SIZE = 384;
@@ -305,7 +315,7 @@ function FrameThumb({
 			<canvas
 				ref={ref}
 				className="block h-14 w-14"
-				style={{ imageRendering: "pixelated" }}
+				style={{ ...CHECKER_SMALL_STYLE, imageRendering: "pixelated" }}
 			/>
 			<span className="absolute bottom-0 right-0 rounded-tl bg-background/80 px-1 text-[10px] font-medium tabular-nums">
 				{index + 1}
@@ -315,8 +325,12 @@ function FrameThumb({
 }
 
 interface PixelEditorInitialValues {
-	pixelData?: string[][];
+	/** 全フレーム（保存済みの絵文字を編集するとき） */
+	frames?: string[][][];
+	frameDelay?: number;
 	pixelCanvasSize?: number;
+	/** 保存されていた画像の形式（アニメーションを PNG で保存していた場合もある） */
+	outputFormat?: "png" | "gif";
 }
 
 export function PixelEditor({
@@ -327,21 +341,26 @@ export function PixelEditor({
 	/** タブが表示中かどうか（非表示中はショートカットを無効化） */
 	active?: boolean;
 } = {}) {
-	const initSize = initialValues?.pixelCanvasSize ?? 32;
-	const initGrid = initialValues?.pixelData ?? createEmptyGrid(initSize);
+	const initFrames = initialValues?.frames?.length
+		? initialValues.frames
+		: [createEmptyGrid(initialValues?.pixelCanvasSize ?? 32)];
+	const initSize = initFrames[0].length;
+	const copyFrames = (fs: string[][][]) => fs.map((f) => f.map((r) => [...r]));
 
 	const [canvasSize, setCanvasSize] = useState(String(initSize));
-	const [frames, setFrames] = useState<string[][][]>(() => [
-		initGrid.map((r) => [...r]),
-	]);
-	const [frameIds, setFrameIds] = useState<string[]>(() => [createId()]);
+	const [frames, setFrames] = useState<string[][][]>(() =>
+		copyFrames(initFrames),
+	);
+	const [frameIds, setFrameIds] = useState<string[]>(() =>
+		initFrames.map(() => createId()),
+	);
 	const [currentFrame, setCurrentFrame] = useState(0);
 	// stack と index を1つの state にまとめ、非同期更新での不整合を防ぐ
 	const [history, setHistory] = useState<{
 		stack: string[][][][];
 		index: number;
 	}>(() => ({
-		stack: [[initGrid.map((r) => [...r])]],
+		stack: [copyFrames(initFrames)],
 		index: 0,
 	}));
 	const [drawColor, setDrawColor] = useState("#000000");
@@ -351,9 +370,13 @@ export function PixelEditor({
 	const [isDrawing, setIsDrawing] = useState(false);
 	const [shapeAnchor, setShapeAnchor] = useState<Cell | null>(null);
 	const [previewCells, setPreviewCells] = useState<Cell[]>([]);
-	const [frameDelay, setFrameDelay] = useState(200);
+	const [frameDelay, setFrameDelay] = useState(
+		initialValues?.frameDelay ?? DEFAULT_FRAME_DELAY,
+	);
 	const [isPlaying, setIsPlaying] = useState(false);
-	const [outputFormat, setOutputFormat] = useState<"png" | "gif">("png");
+	const [outputFormat, setOutputFormat] = useState<"png" | "gif">(
+		initialValues?.outputFormat ?? "png",
+	);
 	const [isSavingGif, setIsSavingGif] = useState(false);
 	const [zoom, setZoom] = useState(1);
 	const [showGrid, setShowGrid] = useState(true);
@@ -424,7 +447,7 @@ export function PixelEditor({
 	const drawCell = useCallback(
 		(row: number, col: number) => {
 			if (row < 0 || row >= size || col < 0 || col >= size) return;
-			const color = activeTool === "eraser" ? "#ffffff" : drawColor;
+			const color = activeTool === "eraser" ? TRANSPARENT : drawColor;
 			setFrames((prev) => {
 				const frame = prev[currentFrame];
 				if (!frame || frame[row][col] === color) return prev;
@@ -476,11 +499,19 @@ export function PixelEditor({
 		[size],
 	);
 
-	/** クリック位置の色を拾って描画色にする（スポイト / Alt+クリック） */
+	/**
+	 * クリック位置の色を拾って描画色にする（スポイト / Alt+クリック）。
+	 * スポイトツールで透明なセルを拾ったときだけ消しゴムに切り替える
+	 * （Alt+クリックは一時的な色取りなのでツールは変えない）。
+	 */
 	const pickColorAt = useCallback(
-		(row: number, col: number) => {
+		(row: number, col: number, switchToEraser: boolean) => {
 			const picked = frames[currentFrame]?.[row]?.[col];
 			if (!picked) return;
+			if (isTransparent(picked)) {
+				if (switchToEraser) setActiveTool("eraser");
+				return;
+			}
 			setDrawColor(picked);
 			setCustomColor(picked);
 		},
@@ -497,9 +528,10 @@ export function PixelEditor({
 
 			// Alt+クリックはツールに関わらずその場でスポイト
 			if (e.altKey || activeTool === "eyedropper") {
-				pickColorAt(row, col);
+				pickColorAt(row, col, activeTool === "eyedropper");
 				// スポイトツールで拾ったらペンに戻す（すぐ描ける）
-				if (activeTool === "eyedropper") setActiveTool("pencil");
+				if (activeTool === "eyedropper")
+					setActiveTool((t) => (t === "eraser" ? t : "pencil"));
 				return;
 			}
 
@@ -568,7 +600,7 @@ export function PixelEditor({
 			setPreviewCells([]);
 			return;
 		}
-		const color = activeTool === "eraser" ? "#ffffff" : drawColor;
+		const color = activeTool === "eraser" ? TRANSPARENT : drawColor;
 		const newFrames = frames.map((f, fi) => {
 			if (fi !== currentFrame) return f;
 			const g = f.map((row) => [...row]);
@@ -842,6 +874,7 @@ export function PixelEditor({
 
 		if (previewCells.length > 0) {
 			ctx.globalAlpha = 0.65;
+			// 消しゴムのプレビューは透明だと見えないので白で示す
 			ctx.fillStyle = activeTool === "eraser" ? "#ffffff" : drawColor;
 			for (const [r, c] of previewCells) {
 				ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
@@ -909,8 +942,7 @@ export function PixelEditor({
 			canvas.height = EXPORT_SIZE;
 			const ctx = canvas.getContext("2d");
 			if (!ctx) return canvas;
-			ctx.fillStyle = "#ffffff";
-			ctx.fillRect(0, 0, EXPORT_SIZE, EXPORT_SIZE);
+			// 透明なセルは塗らない（背景を透過で書き出す）
 			const cs = EXPORT_SIZE / size;
 			for (let row = 0; row < size; row++) {
 				for (let col = 0; col < size; col++) {
@@ -929,7 +961,9 @@ export function PixelEditor({
 	);
 
 	const downloadPng = useCallback(() => {
-		downloadDataUrl(getImageData(), `emoji_pixel_${Date.now()}.png`);
+		const png = getImageData();
+		reportSlackSize(png);
+		downloadDataUrl(png, `emoji_pixel_${Date.now()}.png`);
 	}, [getImageData]);
 
 	const buildGifDataUrl = useCallback(async (): Promise<string> => {
@@ -943,7 +977,15 @@ export function PixelEditor({
 				delay: frameDelay,
 			});
 		}
-		return encodeGifToDataUrl(gifFrames, EXPORT_SIZE, EXPORT_SIZE);
+		const fitted = await encodeGifWithinLimit(
+			gifFrames,
+			EXPORT_SIZE,
+			EXPORT_SIZE,
+			SLACK_EMOJI_MAX_BYTES,
+			{ transparent: hasTransparentCell(frames) },
+		);
+		reportSlackSize(fitted);
+		return fitted.dataUrl;
 	}, [frames, renderFrameToCanvas, frameDelay]);
 
 	const [isDownloading, setIsDownloading] = useState(false);
@@ -972,6 +1014,7 @@ export function PixelEditor({
 			frames,
 			canvasSize: size,
 			frameDelay,
+			outputFormat,
 			savedAt: Date.now(),
 		}),
 	});
@@ -994,6 +1037,8 @@ export function PixelEditor({
 		setFrameIds(restored.map(() => createId()));
 		setCurrentFrame(0);
 		setFrameDelay(availableDraft.frameDelay);
+		if (availableDraft.outputFormat)
+			setOutputFormat(availableDraft.outputFormat);
 		setHistory({
 			stack: [restored.map((f) => f.map((row) => [...row]))],
 			index: 0,
@@ -1019,11 +1064,13 @@ export function PixelEditor({
 			}
 		} else {
 			imageData = getImageData();
+			reportSlackSize(imageData);
 		}
 		save.submitSave({
 			editorType: "PIXEL",
 			imageData,
-			pixelData: frames[currentFrame],
+			// 全フレームを保存し、編集時にアニメーションごと復元できるようにする
+			pixelData: { frames, frameDelay },
 			pixelCanvasSize: size,
 		});
 	};
@@ -1302,6 +1349,8 @@ export function PixelEditor({
 							height={FIXED_DISPLAY_SIZE}
 							className={`block touch-none select-none rounded-lg mx-auto ${isPlaying ? "cursor-default" : "cursor-crosshair"}`}
 							style={{
+								// 透明なセルは市松模様で示す
+								...CHECKER_STYLE,
 								imageRendering: "pixelated",
 								// 高さは縦横比から決める（狭い画面で幅だけ縮んで歪まないように）
 								width: Math.round(BASE_DISPLAY_SIZE * zoom),
@@ -1440,7 +1489,10 @@ export function PixelEditor({
 									role="img"
 									aria-label="実寸プレビュー（128px）"
 									className="block w-[64px] h-[64px]"
-									style={{ imageRendering: "pixelated" }}
+									style={{
+										...CHECKER_SMALL_STYLE,
+										imageRendering: "pixelated",
+									}}
 								/>
 							</div>
 							<div className="text-xs text-muted-foreground leading-relaxed">

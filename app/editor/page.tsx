@@ -6,6 +6,7 @@ import { Suspense, useEffect, useState } from "react";
 import { PixelEditor } from "@/components/editor/pixel-editor";
 import { TextEditor } from "@/components/editor/text-editor";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { parsePixelData } from "@/lib/pixel/pixel-data";
 import { findTemplate } from "@/lib/templates";
 import { api } from "@/lib/trpc/react";
 
@@ -46,11 +47,20 @@ function EditorContent() {
 					}
 				: undefined;
 
+	const pixelDoc =
+		editEmoji?.editorType === "PIXEL"
+			? parsePixelData(editEmoji.pixelData)
+			: null;
 	const pixelInitial =
 		editEmoji?.editorType === "PIXEL"
 			? {
-					pixelData: editEmoji.pixelData as string[][] | undefined,
+					frames: pixelDoc?.frames,
+					frameDelay: pixelDoc?.frameDelay,
 					pixelCanvasSize: editEmoji.pixelCanvasSize ?? undefined,
+					outputFormat:
+						editEmoji.imageMimeType === "image/gif"
+							? ("gif" as const)
+							: ("png" as const),
 				}
 			: undefined;
 

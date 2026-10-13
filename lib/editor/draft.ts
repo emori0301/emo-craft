@@ -30,6 +30,8 @@ export type PixelEditorDraft = {
 	frames: string[][][];
 	canvasSize: number;
 	frameDelay: number;
+	/** 後から追加したフィールド（古い下書きには無い） */
+	outputFormat?: "png" | "gif";
 	savedAt: number;
 };
 

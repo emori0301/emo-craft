@@ -6,7 +6,10 @@
  * - くっきり: セル内に「インク」（背景の白から離れた色）が一定以上あればその色だけを平均する
  * - なめらか: セル内の全ピクセルを平均する（写真向け）
  * で色を決め、さらに色数を絞って中間色を減らす。
+ * 元画像の透明部分は透明のまま、縁からつながる白い背景も（指定すれば）透明にする。
  */
+
+import { TRANSPARENT } from "../pixel/pixel-data";
 
 export type PixelateMode = "crisp" | "smooth";
 
@@ -14,11 +17,14 @@ export type PixelateOptions = {
 	mode: PixelateMode;
 	/** 使う色の最大数。null なら制限しない */
 	colors: number | null;
+	/** 白い背景を透明にする（Slack のダークモードで白い四角にならないように） */
+	transparentBackground: boolean;
 };
 
 export const DEFAULT_PIXELATE_OPTIONS: PixelateOptions = {
 	mode: "crisp",
 	colors: 8,
+	transparentBackground: true,
 };
 
 /** 1セルあたりのサンプリング数（一辺） */
@@ -28,6 +34,8 @@ export const SAMPLES_PER_CELL = 8;
 const INK_THRESHOLD = 48;
 /** セル内のインクの割合がこれ以上ならインクの色で塗る（細い線を残すため低め） */
 const INK_RATIO = 0.15;
+/** なめらか変換で、これ以上白に近いセルを背景（透明）とみなす */
+const NEAR_WHITE = 245;
 
 type RGB = [number, number, number];
 
@@ -40,9 +48,16 @@ const rgbToHex = ([r, g, b]: RGB) =>
 const distanceSq = (a: RGB, b: RGB) =>
 	(a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
 
+/** セルの判定結果 */
+type CellInfo =
+	| { kind: "clear" } // 元画像で透明
+	| { kind: "background"; color: RGB } // 白い背景の候補
+	| { kind: "color"; color: RGB };
+
 /**
  * RGBA ピクセル列（一辺 gridSize * scale）を gridSize × gridSize の色に変換する。
- * 透明は背景（白）として扱う。
+ * 元画像の透明部分は透明のまま。transparentBackground なら、画像の縁から
+ * つながっている白い部分だけを透明にする（内側の白目やパンダの白は残す）。
  */
 export function pixelateRgba(
 	data: Uint8ClampedArray,
@@ -51,26 +66,24 @@ export function pixelateRgba(
 	options: PixelateOptions = DEFAULT_PIXELATE_OPTIONS,
 ): string[][] {
 	const width = gridSize * scale;
-	const cells: RGB[] = [];
+	const n = scale * scale;
+	const cells: CellInfo[] = [];
 
 	for (let row = 0; row < gridSize; row++) {
 		for (let col = 0; col < gridSize; col++) {
-			const all: RGB = [0, 0, 0];
+			// アルファで重み付けした平均（白と混ぜないので、半透明の縁が白っぽくならない）
+			const weighted: RGB = [0, 0, 0];
 			const ink: RGB = [0, 0, 0];
 			let inkCount = 0;
+			let alphaSum = 0;
 			for (let y = 0; y < scale; y++) {
 				for (let x = 0; x < scale; x++) {
 					const i = ((row * scale + y) * width + col * scale + x) * 4;
 					const a = data[i + 3] / 255;
-					// 白背景と合成した色
-					const c: RGB = [
-						data[i] * a + 255 * (1 - a),
-						data[i + 1] * a + 255 * (1 - a),
-						data[i + 2] * a + 255 * (1 - a),
-					];
-					all[0] += c[0];
-					all[1] += c[1];
-					all[2] += c[2];
+					alphaSum += a;
+					weighted[0] += data[i] * a;
+					weighted[1] += data[i + 1] * a;
+					weighted[2] += data[i + 2] * a;
 					const isInk =
 						a >= 0.5 &&
 						Math.max(255 - data[i], 255 - data[i + 1], 255 - data[i + 2]) >=
@@ -84,30 +97,101 @@ export function pixelateRgba(
 					}
 				}
 			}
-			const n = scale * scale;
-			if (options.mode === "crisp") {
+
+			if (alphaSum / n < 0.5) {
+				cells.push({ kind: "clear" });
+			} else if (options.mode === "crisp") {
 				cells.push(
 					inkCount / n >= INK_RATIO
-						? [ink[0] / inkCount, ink[1] / inkCount, ink[2] / inkCount]
-						: [...BACKGROUND],
+						? {
+								kind: "color",
+								color: [
+									ink[0] / inkCount,
+									ink[1] / inkCount,
+									ink[2] / inkCount,
+								],
+							}
+						: { kind: "background", color: [...BACKGROUND] },
 				);
 			} else {
-				cells.push([all[0] / n, all[1] / n, all[2] / n]);
+				const avg: RGB = [
+					weighted[0] / alphaSum,
+					weighted[1] / alphaSum,
+					weighted[2] / alphaSum,
+				];
+				cells.push(
+					Math.min(...avg) >= NEAR_WHITE
+						? { kind: "background", color: avg }
+						: { kind: "color", color: avg },
+				);
 			}
 		}
 	}
 
-	const palette = options.colors ? quantize(cells, options.colors) : null;
+	const transparent = options.transparentBackground
+		? backgroundConnectedToEdge(cells, gridSize)
+		: new Set<number>();
+	const colorOf = (index: number): RGB | null => {
+		const cell = cells[index];
+		if (cell.kind === "clear" || transparent.has(index)) return null;
+		return cell.color;
+	};
+
+	const opaque: RGB[] = [];
+	for (let i = 0; i < cells.length; i++) {
+		const c = colorOf(i);
+		if (c) opaque.push(c);
+	}
+	const palette = options.colors ? quantize(opaque, options.colors) : null;
+
 	const grid: string[][] = [];
 	for (let row = 0; row < gridSize; row++) {
 		const line: string[] = [];
 		for (let col = 0; col < gridSize; col++) {
-			const c = cells[row * gridSize + col];
-			line.push(rgbToHex(palette ? nearest(palette, c) : c));
+			const c = colorOf(row * gridSize + col);
+			if (!c) line.push(TRANSPARENT);
+			else line.push(rgbToHex(palette ? nearest(palette, c) : c));
 		}
 		grid.push(line);
 	}
 	return grid;
+}
+
+/**
+ * 画像の縁（または元から透明な部分）から、背景候補のセルだけを伝ってたどれるセルを返す。
+ * 輪郭線で囲まれた内側の白は含まれない。
+ */
+function backgroundConnectedToEdge(
+	cells: CellInfo[],
+	gridSize: number,
+): Set<number> {
+	const result = new Set<number>();
+	const stack: number[] = [];
+	const passable = (i: number) => cells[i].kind !== "color";
+	for (let i = 0; i < cells.length; i++) {
+		const row = Math.floor(i / gridSize);
+		const col = i % gridSize;
+		const onEdge =
+			row === 0 || col === 0 || row === gridSize - 1 || col === gridSize - 1;
+		if (passable(i) && (onEdge || cells[i].kind === "clear")) stack.push(i);
+	}
+	while (stack.length > 0) {
+		const i = stack.pop() as number;
+		if (result.has(i)) continue;
+		result.add(i);
+		const row = Math.floor(i / gridSize);
+		const col = i % gridSize;
+		const neighbors = [
+			row > 0 ? i - gridSize : -1,
+			row < gridSize - 1 ? i + gridSize : -1,
+			col > 0 ? i - 1 : -1,
+			col < gridSize - 1 ? i + 1 : -1,
+		];
+		for (const nb of neighbors) {
+			if (nb >= 0 && !result.has(nb) && passable(nb)) stack.push(nb);
+		}
+	}
+	return result;
 }
 
 function nearest(palette: RGB[], c: RGB): RGB {
@@ -125,12 +209,11 @@ function nearest(palette: RGB[], c: RGB): RGB {
 
 /**
  * k-means で色を最大 k 色に減らしたパレットを返す（決定的: 乱数を使わない）。
- * 背景の白は常にパレットに含め、余白が別の色に寄らないようにする。
+ * 初期値は「最初の色」から始め、既存の中心から最も遠い色を順に足していく。
  */
 export function quantize(colors: RGB[], k: number): RGB[] {
-	if (colors.length === 0) return [[...BACKGROUND]];
-	// 初期値: 白 + 既存の中心から最も遠い色を順に選ぶ（farthest-point）
-	const centers: RGB[] = [[...BACKGROUND]];
+	if (colors.length === 0) return [];
+	const centers: RGB[] = [[...colors[0]]];
 	while (centers.length < k) {
 		let far: RGB | null = null;
 		let farD = 0;
@@ -162,10 +245,9 @@ export function quantize(colors: RGB[], k: number): RGB[] {
 			sums[bi][2] += c[2];
 			sums[bi][3]++;
 		}
-		// 白（index 0）は固定し、他の中心だけ動かす
-		for (let i = 1; i < centers.length; i++) {
-			const [r, g, b, n] = sums[i];
-			if (n > 0) centers[i] = [r / n, g / n, b / n];
+		for (let i = 0; i < centers.length; i++) {
+			const [r, g, b, count] = sums[i];
+			if (count > 0) centers[i] = [r / count, g / count, b / count];
 		}
 	}
 	return centers;

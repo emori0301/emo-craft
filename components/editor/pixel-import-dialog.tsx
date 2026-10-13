@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SegmentedControl } from "@/components/editor/editor-ui";
+import {
+	CHECKER_SMALL_STYLE,
+	SegmentedControl,
+} from "@/components/editor/editor-ui";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -12,6 +15,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
 	DEFAULT_PIXELATE_OPTIONS,
 	type PixelateMode,
@@ -52,7 +56,7 @@ function GridPreview({ grid }: { grid: string[][] }) {
 			role="img"
 			aria-label="変換結果のプレビュー"
 			className="block h-48 w-48 rounded-lg border sm:h-56 sm:w-56"
-			style={{ imageRendering: "pixelated" }}
+			style={{ ...CHECKER_SMALL_STYLE, imageRendering: "pixelated" }}
 		/>
 	);
 }
@@ -74,6 +78,9 @@ export function PixelImportDialog({
 	onConfirm: (grid: string[][]) => void;
 }) {
 	const [mode, setMode] = useState<PixelateMode>(DEFAULT_PIXELATE_OPTIONS.mode);
+	const [transparentBackground, setTransparentBackground] = useState(
+		DEFAULT_PIXELATE_OPTIONS.transparentBackground,
+	);
 	const [colors, setColors] = useState<ColorOption>(
 		String(DEFAULT_PIXELATE_OPTIONS.colors) as ColorOption,
 	);
@@ -89,9 +96,10 @@ export function PixelImportDialog({
 				? pixelateRgba(samples, gridSize, SAMPLES_PER_CELL, {
 						mode,
 						colors: colors === "all" ? null : Number(colors),
+						transparentBackground,
 					})
 				: null,
-		[samples, gridSize, mode, colors],
+		[samples, gridSize, mode, colors, transparentBackground],
 	);
 
 	return (
@@ -135,6 +143,19 @@ export function PixelImportDialog({
 						<p className="text-xs text-muted-foreground">
 							色を減らすほど、輪郭の中間色（にじみ）が消えてくっきりします
 						</p>
+					</div>
+					<div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+						<Label htmlFor="import-transparent" className="cursor-pointer">
+							白い背景を透明にする
+							<span className="block text-xs font-normal text-muted-foreground">
+								Slack のダークモードで白い四角になりません
+							</span>
+						</Label>
+						<Switch
+							id="import-transparent"
+							checked={transparentBackground}
+							onCheckedChange={setTransparentBackground}
+						/>
 					</div>
 				</div>
 

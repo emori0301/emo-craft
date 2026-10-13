@@ -7,6 +7,7 @@ import {
 	plotRect,
 	plotTriangle,
 } from "./shapes";
+import { TRANSPARENT } from "./pixel-data";
 
 const has = (cells: [number, number][], r: number, c: number) =>
 	cells.some(([cr, cc]) => cr === r && cc === c);
@@ -130,7 +131,7 @@ describe("floodFill", () => {
 
 	it("returns empty when target already has the color", () => {
 		const grid = createEmptyGrid(4);
-		expect(floodFill(grid, 0, 0, "#ffffff")).toHaveLength(0);
+		expect(floodFill(grid, 0, 0, TRANSPARENT)).toHaveLength(0);
 	});
 
 	it("returns empty for out-of-bounds start", () => {
@@ -149,14 +150,14 @@ describe("floodFill", () => {
 });
 
 describe("createEmptyGrid", () => {
-	it("creates a size×size grid of white cells with independent rows", () => {
+	it("creates a size×size grid of transparent cells with independent rows", () => {
 		const grid = createEmptyGrid(4);
 		expect(grid).toHaveLength(4);
 		for (const row of grid) {
 			expect(row).toHaveLength(4);
-			for (const cell of row) expect(cell).toBe("#ffffff");
+			for (const cell of row) expect(cell).toBe(TRANSPARENT);
 		}
 		grid[0][0] = "#000000";
-		expect(grid[1][0]).toBe("#ffffff");
+		expect(grid[1][0]).toBe(TRANSPARENT);
 	});
 });

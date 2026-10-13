@@ -13,6 +13,68 @@ export type EncodeGifOptions = {
 	maxColors?: number;
 };
 
+type ExactPalette = {
+	palette: number[][];
+	index: Uint8Array;
+	transparentIndex: number;
+};
+
+/**
+ * 色数が maxColors 以下なら、減色せずにそのままのパレットを作る（ドット絵向け）。
+ * 減色（量子化）すると近い色がまとまってしまうため、使えるときはこちらを優先する。
+ * transparent のときはアルファ < 128 を1つの透明色にまとめる。
+ */
+export function exactPalette(
+	data: Uint8ClampedArray,
+	transparent: boolean,
+	maxColors = 256,
+): ExactPalette | null {
+	const lookup = new Map<number, number>();
+	const palette: number[][] = [];
+	const index = new Uint8Array(data.length / 4);
+	let transparentIndex = -1;
+	for (let p = 0; p < index.length; p++) {
+		const i = p * 4;
+		let key: number;
+		if (transparent && data[i + 3] < 128) {
+			key = -1;
+		} else {
+			key = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+		}
+		let idx = lookup.get(key);
+		if (idx === undefined) {
+			if (palette.length >= maxColors) return null;
+			idx = palette.length;
+			lookup.set(key, idx);
+			if (key === -1) {
+				palette.push([0, 0, 0, 0]);
+				transparentIndex = idx;
+			} else {
+				palette.push(
+					transparent
+						? [data[i], data[i + 1], data[i + 2], 255]
+						: [data[i], data[i + 1], data[i + 2]],
+				);
+			}
+		}
+		index[p] = idx;
+	}
+	return { palette, index, transparentIndex };
+}
+
+/** フレーム全体で使われている色の数（cap を超えたら打ち切る） */
+export function countColors(frames: GifFrame[], cap = 257): number {
+	const seen = new Set<number>();
+	for (const { imageData } of frames) {
+		const d = imageData.data;
+		for (let i = 0; i < d.length; i += 4) {
+			seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+			if (seen.size >= cap) return seen.size;
+		}
+	}
+	return seen.size;
+}
+
 /**
  * フレーム列をアニメーション GIF にエンコードして data URL を返す。
  * gifenc は必要時に動的インポートする（初期バンドルに含めない）。
@@ -28,7 +90,24 @@ export async function encodeGifToDataUrl(
 	const maxColors = options.maxColors ?? 256;
 
 	for (const { imageData, delay } of frames) {
-		if (options.transparent) {
+		const exact = exactPalette(
+			imageData.data,
+			!!options.transparent,
+			maxColors,
+		);
+		if (exact) {
+			gif.writeFrame(exact.index, width, height, {
+				palette: exact.palette,
+				delay,
+				...(exact.transparentIndex >= 0
+					? {
+							transparent: true,
+							transparentIndex: exact.transparentIndex,
+							dispose: 2,
+						}
+					: {}),
+			});
+		} else if (options.transparent) {
 			// GIF の透過は 1bit なのでアルファを二値化する
 			const data = new Uint8ClampedArray(imageData.data);
 			for (let i = 3; i < data.length; i += 4) {
@@ -99,10 +178,14 @@ export async function encodeGifWithinLimit(
 	limitBytes: number,
 	options: Omit<EncodeGifOptions, "maxColors"> = {},
 ): Promise<FittedGif> {
+	if (frames.length === 0) throw new Error("GIF のフレームがありません");
+	// 元の色数より多い段階で減色しても小さくならないので飛ばす
+	const colors = countColors(frames);
+	const steps = COLOR_STEPS.filter((c, i) => i === 0 || c < colors);
 	let current = frames;
-	let last: { dataUrl: string; bytes: number } | null = null;
+	let last = { dataUrl: "", bytes: Number.POSITIVE_INFINITY };
 	for (;;) {
-		for (const maxColors of COLOR_STEPS) {
+		for (const maxColors of steps) {
 			const dataUrl = await encodeGifToDataUrl(current, width, height, {
 				...options,
 				maxColors,
@@ -113,7 +196,7 @@ export async function encodeGifWithinLimit(
 				return {
 					dataUrl,
 					bytes,
-					reduced: current !== frames || maxColors !== COLOR_STEPS[0],
+					reduced: current !== frames || maxColors !== steps[0],
 					overLimit: false,
 				};
 			}
@@ -121,5 +204,5 @@ export async function encodeGifWithinLimit(
 		if (current.length <= 1) break;
 		current = thinFrames(current);
 	}
-	return { ...last, reduced: true, overLimit: true } as FittedGif;
+	return { ...last, reduced: true, overLimit: true };
 }

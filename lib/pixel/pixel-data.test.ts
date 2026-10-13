@@ -3,7 +3,6 @@ import {
 	DEFAULT_FRAME_DELAY,
 	hasTransparentCell,
 	parsePixelData,
-	serializePixelData,
 	TRANSPARENT,
 } from "./pixel-data";
 
@@ -23,14 +22,6 @@ describe("parsePixelData", () => {
 	it("reads all frames and the frame delay", () => {
 		const raw = { frames: [grid("#000000"), grid("#ff0000")], frameDelay: 120 };
 		expect(parsePixelData(raw)).toEqual(raw);
-	});
-
-	it("round-trips through serializePixelData", () => {
-		const doc = {
-			frames: [grid("#111111"), grid(TRANSPARENT)],
-			frameDelay: 300,
-		};
-		expect(parsePixelData(serializePixelData(doc))).toEqual(doc);
 	});
 
 	it("rejects broken data", () => {

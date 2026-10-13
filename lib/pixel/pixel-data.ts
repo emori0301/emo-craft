@@ -12,14 +12,9 @@ export const MAX_PIXEL_GRID = 64;
 export const DEFAULT_FRAME_DELAY = 200;
 
 /**
- * 保存形式。
- * - 旧形式: 1フレームのグリッド（string[][]）
- * - 新形式: 全フレームとコマ送りの間隔
+ * DB の pixelData に保存する形（全フレームとコマ送りの間隔）。
+ * 旧形式の1フレームのグリッド（string[][]）も parsePixelData で読める。
  */
-export type StoredPixelData =
-	| string[][]
-	| { frames: string[][][]; frameDelay: number };
-
 export type PixelDocument = { frames: string[][][]; frameDelay: number };
 
 const isGrid = (v: unknown): v is string[][] =>
@@ -53,11 +48,6 @@ export function parsePixelData(raw: unknown): PixelDocument | null {
 		}
 	}
 	return null;
-}
-
-/** 保存用の形にする（1フレームでも新形式で保存する） */
-export function serializePixelData(doc: PixelDocument): StoredPixelData {
-	return { frames: doc.frames, frameDelay: doc.frameDelay };
 }
 
 /** グリッドに透明なセルがあるか */

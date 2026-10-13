@@ -57,6 +57,10 @@ function EditorContent() {
 					frames: pixelDoc?.frames,
 					frameDelay: pixelDoc?.frameDelay,
 					pixelCanvasSize: editEmoji.pixelCanvasSize ?? undefined,
+					outputFormat:
+						editEmoji.imageMimeType === "image/gif"
+							? ("gif" as const)
+							: ("png" as const),
 				}
 			: undefined;
 

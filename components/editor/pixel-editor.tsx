@@ -92,13 +92,13 @@ import {
 	DEFAULT_FRAME_DELAY,
 	hasTransparentCell,
 	isTransparent,
-	serializePixelData,
+	MAX_PIXEL_FRAMES,
 	TRANSPARENT,
 } from "@/lib/pixel/pixel-data";
 import { cn, createId } from "@/lib/utils";
 
 const FIXED_DISPLAY_SIZE = 512;
-const MAX_FRAMES = 8;
+const MAX_FRAMES = MAX_PIXEL_FRAMES;
 
 /** キャンバスの表示基準サイズ（ズーム 100% 時） */
 const BASE_DISPLAY_SIZE = 384;
@@ -333,6 +333,8 @@ interface PixelEditorInitialValues {
 	frames?: string[][][];
 	frameDelay?: number;
 	pixelCanvasSize?: number;
+	/** 保存されていた画像の形式（アニメーションを PNG で保存していた場合もある） */
+	outputFormat?: "png" | "gif";
 }
 
 export function PixelEditor({
@@ -377,7 +379,7 @@ export function PixelEditor({
 	);
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [outputFormat, setOutputFormat] = useState<"png" | "gif">(
-		initFrames.length > 1 ? "gif" : "png",
+		initialValues?.outputFormat ?? "png",
 	);
 	const [isSavingGif, setIsSavingGif] = useState(false);
 	const [zoom, setZoom] = useState(1);
@@ -1066,7 +1068,7 @@ export function PixelEditor({
 			editorType: "PIXEL",
 			imageData,
 			// 全フレームを保存し、編集時にアニメーションごと復元できるようにする
-			pixelData: serializePixelData({ frames, frameDelay }),
+			pixelData: { frames, frameDelay },
 			pixelCanvasSize: size,
 		});
 	};

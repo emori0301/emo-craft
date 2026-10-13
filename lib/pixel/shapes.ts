@@ -172,7 +172,6 @@ export function floodFill(
 	return cells;
 }
 
-/** size×size の白紙グリッドを作る */
 /** 全セル透明のグリッド */
 export function createEmptyGrid(size: number): string[][] {
 	return Array(size)
